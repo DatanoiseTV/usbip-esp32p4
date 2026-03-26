@@ -2,6 +2,11 @@
 # Target
 CONFIG_IDF_TARGET="esp32p4"
 
+# Chip revision: support ESP32-P4 rev <3.0 (rev 1.3 etc.)
+# NOTE: rev <3.0 and >=3.0 are mutually exclusive due to hardware differences
+CONFIG_ESP32P4_SELECTS_REV_LESS_V3=y
+CONFIG_ESP32P4_REV_MIN_100=y
+
 # CPU frequency
 CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_360=y
 
