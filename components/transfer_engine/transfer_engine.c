@@ -159,18 +159,20 @@ static int find_pending_by_seqnum(uint32_t seqnum)
 
 /**
  * @brief Send an error RET_SUBMIT reply (no transfer data).
+ * Per spec: devid, direction, ep shall be 0 for server responses.
+ * number_of_packets shall be 0xFFFFFFFF for non-ISO.
  */
-static int send_error_reply(int fd, uint32_t seqnum, uint32_t devid,
-                            uint32_t direction, uint32_t ep, int32_t status)
+static int send_error_reply(int fd, uint32_t seqnum, int32_t status)
 {
     usbip_header_t reply;
     memset(&reply, 0, sizeof(reply));
     reply.base.command   = USBIP_RET_SUBMIT;
     reply.base.seqnum    = seqnum;
-    reply.base.devid     = devid;
-    reply.base.direction = direction;
-    reply.base.ep        = ep;
+    reply.base.devid     = 0;
+    reply.base.direction = 0;
+    reply.base.ep        = 0;
     reply.u.ret_submit.status = status;
+    reply.u.ret_submit.number_of_packets = (int32_t)0xFFFFFFFF;
     usbip_pack_header(&reply, true);
     return usbip_net_send(fd, &reply, sizeof(reply));
 }
@@ -240,18 +242,20 @@ static int send_completed_reply(int fd, pending_urb_t *slot)
         }
     }
 
-    /* Build RET_SUBMIT reply */
+    /* Build RET_SUBMIT reply per USB/IP spec:
+     * - devid, direction, ep: shall be 0 for server responses
+     * - number_of_packets: 0xFFFFFFFF if not ISO transfer */
     usbip_header_t reply;
     memset(&reply, 0, sizeof(reply));
     reply.base.command              = USBIP_RET_SUBMIT;
     reply.base.seqnum               = slot->seqnum;
-    reply.base.devid                = slot->devid;
-    reply.base.direction            = slot->direction;
-    reply.base.ep                   = slot->ep;
+    reply.base.devid                = 0;
+    reply.base.direction            = 0;
+    reply.base.ep                   = 0;
     reply.u.ret_submit.status       = reply_status;
     reply.u.ret_submit.actual_length = actual_length;
     reply.u.ret_submit.start_frame  = 0;
-    reply.u.ret_submit.number_of_packets = reply_num_packets;
+    reply.u.ret_submit.number_of_packets = (slot->num_iso > 0) ? reply_num_packets : (int32_t)0xFFFFFFFF;
     reply.u.ret_submit.error_count  = reply_error_count;
 
     usbip_pack_header(&reply, true);
@@ -318,6 +322,11 @@ static int handle_cmd_submit(int fd, usbip_header_t *hdr, const dm_device_info_t
     int32_t  buflen   = hdr->u.cmd_submit.transfer_buffer_length;
     int32_t  num_iso  = hdr->u.cmd_submit.number_of_packets;
 
+    /* Per spec: number_of_packets is 0xFFFFFFFF for non-ISO transfers */
+    if (num_iso == (int32_t)0xFFFFFFFF) {
+        num_iso = 0;
+    }
+
     ESP_LOGI(TAG, "CMD_SUBMIT seq=%lu ep=%lu dir=%s buflen=%ld flags=0x%08lx",
              (unsigned long)seqnum, (unsigned long)ep,
              direction == USBIP_DIR_IN ? "IN" : "OUT",
@@ -338,7 +347,7 @@ static int handle_cmd_submit(int fd, usbip_header_t *hdr, const dm_device_info_t
         if (num_iso > 0) {
             drain_socket(fd, num_iso * 16);
         }
-        send_error_reply(fd, seqnum, hdr->base.devid, direction, ep, -LINUX_EIO);
+        send_error_reply(fd, seqnum, -LINUX_EIO);
         return 0; /* non-fatal */
     }
 
@@ -362,7 +371,7 @@ static int handle_cmd_submit(int fd, usbip_header_t *hdr, const dm_device_info_t
         if (num_iso > 0) {
             drain_socket(fd, num_iso * 16);
         }
-        send_error_reply(fd, seqnum, hdr->base.devid, direction, ep, -LINUX_EIO);
+        send_error_reply(fd, seqnum, -LINUX_EIO);
         return 0; /* non-fatal */
     }
 
@@ -377,7 +386,7 @@ static int handle_cmd_submit(int fd, usbip_header_t *hdr, const dm_device_info_t
         if (num_iso > 0) {
             drain_socket(fd, num_iso * 16);
         }
-        send_error_reply(fd, seqnum, hdr->base.devid, direction, ep, -LINUX_EIO);
+        send_error_reply(fd, seqnum, -LINUX_EIO);
         return 0;
     }
 
@@ -406,7 +415,7 @@ static int handle_cmd_submit(int fd, usbip_header_t *hdr, const dm_device_info_t
         if (num_iso > 0) {
             drain_socket(fd, num_iso * 16);
         }
-        send_error_reply(fd, seqnum, hdr->base.devid, direction, ep, -LINUX_ENODEV);
+        send_error_reply(fd, seqnum, -LINUX_ENODEV);
         free_pending_slot(slot);
         return 0;
     }
@@ -465,7 +474,7 @@ static int handle_cmd_submit(int fd, usbip_header_t *hdr, const dm_device_info_t
     if (submit_err != ESP_OK) {
         ESP_LOGE(TAG, "Transfer submit failed: %s (ep=0x%02x)",
                  esp_err_to_name(submit_err), xfer->bEndpointAddress);
-        send_error_reply(fd, seqnum, hdr->base.devid, direction, ep, -LINUX_EIO);
+        send_error_reply(fd, seqnum, -LINUX_EIO);
         free_pending_slot(slot);
         return 0; /* non-fatal */
     }
@@ -489,7 +498,9 @@ static int handle_cmd_unlink(int fd, usbip_header_t *hdr, const dm_device_info_t
     int slot_idx = find_pending_by_seqnum(unlink_seqnum);
 
     if (slot_idx >= 0) {
-        /* Found the pending URB - abort it */
+        /* Found the pending URB - abort it.
+         * Per spec: after successful UNLINK, the unlinked URB shall NOT get
+         * a RET_SUBMIT. We only send the RET_UNLINK with -ECONNRESET. */
         pending_urb_t *slot = &s_pending[slot_idx];
         usb_device_handle_t dev_handle = usb_host_mgr_get_handle(devinfo->dev_addr);
 
@@ -498,21 +509,22 @@ static int handle_cmd_unlink(int fd, usbip_header_t *hdr, const dm_device_info_t
                  (unsigned)(slot->ep | (slot->direction == USBIP_DIR_IN ? 0x80 : 0x00)));
 
         abort_pending_urb(slot, dev_handle);
-
-        /* Send RET_SUBMIT with -ECONNRESET for the original URB */
-        send_error_reply(fd, slot->seqnum, slot->devid, slot->direction, slot->ep, -LINUX_ECONNRESET);
+        /* Do NOT send RET_SUBMIT - spec says no RET_SUBMIT after successful UNLINK */
         free_pending_slot(slot);
     }
 
-    /* Send RET_UNLINK response */
+    /* Send RET_UNLINK response.
+     * Per spec: devid, direction, ep shall be 0 for server responses.
+     * status: -ECONNRESET if UNLINK was successful (URB was still pending),
+     *         0 if the URB had already completed (UNLINK came too late). */
     usbip_header_t reply;
     memset(&reply, 0, sizeof(reply));
     reply.base.command          = USBIP_RET_UNLINK;
     reply.base.seqnum           = seqnum;
-    reply.base.devid            = hdr->base.devid;
+    reply.base.devid            = 0;
     reply.base.direction        = 0;
     reply.base.ep               = 0;
-    reply.u.ret_unlink.status   = (slot_idx >= 0) ? 0 : -LINUX_ECONNRESET;
+    reply.u.ret_unlink.status   = (slot_idx >= 0) ? -LINUX_ECONNRESET : 0;
 
     usbip_pack_header(&reply, true);
 
@@ -668,8 +680,7 @@ int transfer_engine_run(int sockfd, const char *busid)
                 abort_pending_urb(slot, cached_dev_handle);
 
                 /* Send timeout reply */
-                send_error_reply(sockfd, slot->seqnum, slot->devid,
-                                slot->direction, slot->ep, -LINUX_ETIMEDOUT);
+                send_error_reply(sockfd, slot->seqnum, -LINUX_ETIMEDOUT);
                 free_pending_slot(slot);
             }
         }
@@ -708,8 +719,7 @@ cleanup:
             abort_pending_urb(slot, cleanup_handle);
 
             /* Send -ENODEV for each pending URB so client knows device is gone */
-            send_error_reply(sockfd, slot->seqnum, slot->devid,
-                            slot->direction, slot->ep, -LINUX_ENODEV);
+            send_error_reply(sockfd, slot->seqnum, -LINUX_ENODEV);
 
             free_pending_slot(slot);
         }
