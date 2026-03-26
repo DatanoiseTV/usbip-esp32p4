@@ -27,11 +27,11 @@ static const char *TAG = "xfer_eng";
 /* Minimum transfer buffer allocation */
 #define MIN_TRANSFER_SIZE   64
 
-/* Transfer completion timeout (ms) */
-#define TRANSFER_TIMEOUT_MS 10000
+/* Transfer completion timeout (ms) - must be longer than USB_XFER_TIMEOUT_MS */
+#define TRANSFER_TIMEOUT_MS 35000
 
 /* USB transfer timeout set on the transfer object (ms) */
-#define USB_XFER_TIMEOUT_MS 5000
+#define USB_XFER_TIMEOUT_MS 30000
 
 /* Linux errno values (USB/IP client expects these, not ESP-IDF values) */
 #define LINUX_EIO           5
@@ -112,6 +112,11 @@ static int handle_cmd_submit(int fd, usbip_header_t *hdr, const dm_device_info_t
     uint32_t direction = hdr->base.direction;
     int32_t  buflen   = hdr->u.cmd_submit.transfer_buffer_length;
     int32_t  num_iso  = hdr->u.cmd_submit.number_of_packets;
+
+    ESP_LOGI(TAG, "CMD_SUBMIT seq=%lu ep=%lu dir=%s buflen=%ld flags=0x%08lx",
+             (unsigned long)seqnum, (unsigned long)ep,
+             direction == USBIP_DIR_IN ? "IN" : "OUT",
+             (long)buflen, (unsigned long)hdr->u.cmd_submit.transfer_flags);
 
     /* Clamp buffer length */
     if (buflen < 0) buflen = 0;
@@ -247,6 +252,8 @@ static int handle_cmd_submit(int fd, usbip_header_t *hdr, const dm_device_info_t
     }
 
     /* Submit the transfer */
+    ESP_LOGI(TAG, "Submitting: ep_addr=0x%02x num_bytes=%d timeout=%dms",
+             xfer->bEndpointAddress, xfer->num_bytes, xfer->timeout_ms);
     esp_err_t submit_err;
     if (is_control) {
         usb_host_client_handle_t client_hdl = usb_host_mgr_get_client_handle();
