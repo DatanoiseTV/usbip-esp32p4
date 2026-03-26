@@ -216,6 +216,12 @@ esp_err_t device_manager_release(int index)
         return ESP_ERR_NOT_FOUND;
     }
 
+    /* Idempotent: if already AVAILABLE, nothing to do */
+    if (dev->state == DEV_STATE_AVAILABLE) {
+        give_lock();
+        return ESP_OK;
+    }
+
     dev->state = DEV_STATE_AVAILABLE;
     dev->client_ip = 0;
 

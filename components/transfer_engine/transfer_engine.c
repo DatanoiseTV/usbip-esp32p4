@@ -557,6 +557,21 @@ int transfer_engine_run(int sockfd, const char *busid)
         return -1;
     }
 
+    /*
+     * Cache the device handle up front. Once the device is unplugged,
+     * usb_host_mgr_get_handle() returns NULL because the tracked entry
+     * is freed. We still need the handle for endpoint halt/flush/clear
+     * during cleanup of in-flight transfers.
+     */
+    usb_device_handle_t cached_dev_handle = usb_host_mgr_get_handle(devinfo.dev_addr);
+    if (!cached_dev_handle) {
+        ESP_LOGE(TAG, "No device handle for addr %d at start", devinfo.dev_addr);
+        return -1;
+    }
+
+    /* Clear any stale removal notification */
+    usb_host_mgr_check_removal();
+
     event_log_add(EVENT_LOG_LEVEL_INFO, "Transfer engine started for %s (addr=%d)",
                   busid, devinfo.dev_addr);
 
@@ -565,7 +580,18 @@ int transfer_engine_run(int sockfd, const char *busid)
 
     /* Main concurrent URB forwarding loop */
     int ret = 0;
+    bool device_removed = false;
+
     while (1) {
+        /* ---- Check device removal flag (set by usb_host_mgr) ---- */
+        uint8_t removed_addr = usb_host_mgr_check_removal();
+        if (removed_addr == devinfo.dev_addr) {
+            ESP_LOGW(TAG, "Device addr=%d removed (notified by usb_host_mgr)", devinfo.dev_addr);
+            device_removed = true;
+            ret = -1;
+            break;
+        }
+
         /* ---- Phase 1: Check socket for new data (non-blocking) ---- */
         fd_set readfds;
         FD_ZERO(&readfds);
@@ -619,7 +645,6 @@ int transfer_engine_run(int sockfd, const char *busid)
 
         /* ---- Phase 2: Check all pending URBs for completions ---- */
         int64_t now = esp_timer_get_time();
-        usb_device_handle_t dev_handle = usb_host_mgr_get_handle(devinfo.dev_addr);
 
         for (int i = 0; i < MAX_PENDING_URBS; i++) {
             pending_urb_t *slot = &s_pending[i];
@@ -640,7 +665,7 @@ int transfer_engine_run(int sockfd, const char *busid)
                 ESP_LOGE(TAG, "Transfer timeout (seqnum=%lu), aborting ep=0x%02x",
                          (unsigned long)slot->seqnum, slot->xfer->bEndpointAddress);
 
-                abort_pending_urb(slot, dev_handle);
+                abort_pending_urb(slot, cached_dev_handle);
 
                 /* Send timeout reply */
                 send_error_reply(sockfd, slot->seqnum, slot->devid,
@@ -652,15 +677,26 @@ int transfer_engine_run(int sockfd, const char *busid)
         /* ---- Phase 3: Check if device still exists ---- */
         if (device_manager_get(dev_index, &devinfo) != ESP_OK || !devinfo.in_use) {
             ESP_LOGW(TAG, "Device removed during transfer session");
+            device_removed = true;
             ret = -1;
             break;
         }
     }
 
 cleanup:
-    /* Abort all active pending URBs */
+    /*
+     * Cleanup: abort all active pending URBs.
+     * Use the cached dev_handle - it may still be valid even if the device
+     * was removed from the tracked table. If the device was physically
+     * unplugged, the handle is stale but endpoint ops will simply fail,
+     * which is fine.
+     *
+     * For device removal: send -ENODEV RET_SUBMIT for each pending URB
+     * so the client knows the device is gone, before freeing the slot.
+     */
     {
-        usb_device_handle_t dev_handle = usb_host_mgr_get_handle(devinfo.dev_addr);
+        usb_device_handle_t cleanup_handle = device_removed ? NULL : cached_dev_handle;
+
         for (int i = 0; i < MAX_PENDING_URBS; i++) {
             pending_urb_t *slot = &s_pending[i];
             if (!slot->active) {
@@ -668,7 +704,13 @@ cleanup:
             }
             ESP_LOGW(TAG, "Cleanup: aborting pending URB seqnum=%lu",
                      (unsigned long)slot->seqnum);
-            abort_pending_urb(slot, dev_handle);
+
+            abort_pending_urb(slot, cleanup_handle);
+
+            /* Send -ENODEV for each pending URB so client knows device is gone */
+            send_error_reply(sockfd, slot->seqnum, slot->devid,
+                            slot->direction, slot->ep, -LINUX_ENODEV);
+
             free_pending_slot(slot);
         }
     }

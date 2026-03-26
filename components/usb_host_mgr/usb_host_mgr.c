@@ -43,6 +43,9 @@ static SemaphoreHandle_t s_daemon_ready_sem;
 static usb_host_client_handle_t s_client_hdl;
 static volatile bool s_stop_requested;
 
+/* Device-removal flag: set by handle_device_gone(), read by transfer engine */
+static volatile uint8_t s_removed_addr = 0;
+
 /* ---- Speed mapping: ESP-IDF usb_speed_t -> device_manager device_speed_t ---- */
 static device_speed_t map_speed(usb_speed_t speed)
 {
@@ -218,6 +221,9 @@ static void handle_device_gone(usb_device_handle_t dev_hdl)
     uint8_t dev_addr = s_tracked[idx].dev_addr;
     ESP_LOGI(TAG, "Device gone: addr=%d", dev_addr);
     event_log_add(EVENT_LOG_LEVEL_INFO, "USB device disconnected: addr=%d", dev_addr);
+
+    /* Notify transfer engine about removal before any cleanup */
+    usb_host_mgr_notify_removal(dev_addr);
 
     /* Remove from device_manager by busid */
     char busid[32];
@@ -506,4 +512,19 @@ esp_err_t usb_host_mgr_release_interfaces(uint8_t dev_addr)
     }
 
     return ESP_OK;
+}
+
+void usb_host_mgr_notify_removal(uint8_t dev_addr)
+{
+    s_removed_addr = dev_addr;
+    ESP_LOGI(TAG, "Device removal notified: addr=%d", dev_addr);
+}
+
+uint8_t usb_host_mgr_check_removal(void)
+{
+    uint8_t addr = s_removed_addr;
+    if (addr != 0) {
+        s_removed_addr = 0;
+    }
+    return addr;
 }

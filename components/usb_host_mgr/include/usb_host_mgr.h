@@ -59,6 +59,23 @@ esp_err_t usb_host_mgr_claim_interfaces(uint8_t dev_addr);
  */
 esp_err_t usb_host_mgr_release_interfaces(uint8_t dev_addr);
 
+/**
+ * @brief Notify that a device has been physically removed
+ *
+ * Called from handle_device_gone() so the transfer engine can detect
+ * removal without polling device_manager.
+ *
+ * @param dev_addr USB device address that was removed
+ */
+void usb_host_mgr_notify_removal(uint8_t dev_addr);
+
+/**
+ * @brief Check and clear the device-removal flag
+ *
+ * @return The dev_addr that was removed, or 0 if none
+ */
+uint8_t usb_host_mgr_check_removal(void);
+
 #ifdef __cplusplus
 }
 #endif
