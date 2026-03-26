@@ -40,10 +40,10 @@ static const char *TAG = "xfer_eng";
 #define PENDING_URB_TIMEOUT_US  (30 * 1000 * 1000LL)
 
 /* select() timeout for polling the socket (microseconds) */
-#define SELECT_TIMEOUT_US   10000
+#define SELECT_TIMEOUT_US   1000
 
 /* Maximum concurrent pending URBs */
-#define MAX_PENDING_URBS    16
+#define MAX_PENDING_URBS    32
 
 /* Linux errno values (USB/IP client expects these, not ESP-IDF values) */
 #define LINUX_EIO           5
@@ -289,7 +289,7 @@ static int send_completed_reply(int fd, pending_urb_t *slot)
 
     /* Log every transfer at INFO level for debugging */
     if (reply_status == 0) {
-        ESP_LOGD(TAG, "URB seqnum=%lu ep=0x%02x %s len=%ld ok",
+        ESP_LOGI(TAG, "URB seqnum=%lu ep=0x%02x %s len=%ld ok",
                  (unsigned long)slot->seqnum,
                  (unsigned)(slot->ep | (slot->direction == USBIP_DIR_IN ? 0x80 : 0x00)),
                  slot->direction == USBIP_DIR_IN ? "IN" : "OUT",
@@ -318,7 +318,7 @@ static int handle_cmd_submit(int fd, usbip_header_t *hdr, const dm_device_info_t
     int32_t  buflen   = hdr->u.cmd_submit.transfer_buffer_length;
     int32_t  num_iso  = hdr->u.cmd_submit.number_of_packets;
 
-    ESP_LOGD(TAG, "CMD_SUBMIT seq=%lu ep=%lu dir=%s buflen=%ld flags=0x%08lx",
+    ESP_LOGI(TAG, "CMD_SUBMIT seq=%lu ep=%lu dir=%s buflen=%ld flags=0x%08lx",
              (unsigned long)seqnum, (unsigned long)ep,
              direction == USBIP_DIR_IN ? "IN" : "OUT",
              (long)buflen, (unsigned long)hdr->u.cmd_submit.transfer_flags);
