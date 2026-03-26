@@ -5,17 +5,307 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>USB/IP Server - Dashboard</title>
     <link rel="stylesheet" href="/style.css">
-    <script src="/htmx.min.js"></script>
 </head>
 <body>
-    <h1>USB/IP Server Dashboard</h1>
-    <p>Placeholder - will be replaced with full dashboard UI.</p>
-    <div id="devices">
-        <h2>Connected USB Devices</h2>
-        <p>No devices connected.</p>
+    <div class="header">
+        <div class="header-left">
+            <h1><span class="ws-indicator" id="ws-dot"></span>USB/IP Server</h1>
+            <div class="subtitle">ESP32-P4-Nano</div>
+        </div>
+        <div class="header-right">
+            <a href="/settings" title="Settings">&#9881;</a>
+        </div>
     </div>
-    <nav>
-        <a href="/settings.html">Settings</a>
-    </nav>
+
+    <div class="main">
+        <!-- Status cards -->
+        <div class="stat-cards">
+            <div class="stat-card">
+                <div class="label">Free Memory</div>
+                <div class="value accent" id="stat-heap">--</div>
+            </div>
+            <div class="stat-card">
+                <div class="label">Uptime</div>
+                <div class="value" id="stat-uptime">--</div>
+            </div>
+            <div class="stat-card">
+                <div class="label">Devices</div>
+                <div class="value green" id="stat-devices">0</div>
+            </div>
+            <div class="stat-card">
+                <div class="label">Clients</div>
+                <div class="value accent" id="stat-clients">0</div>
+            </div>
+        </div>
+
+        <div class="content-grid">
+            <!-- USB Devices panel -->
+            <div class="panel full-width">
+                <div class="panel-header">USB Devices</div>
+                <div class="panel-body" id="device-list">
+                    <div class="empty-state">No USB devices connected</div>
+                </div>
+            </div>
+
+            <!-- Bandwidth panel -->
+            <div class="panel">
+                <div class="panel-header">Bandwidth</div>
+                <div class="panel-body">
+                    <div class="bw-bar-container">
+                        <div class="bw-bar-label">
+                            <span>IN</span>
+                            <span id="bw-in-val">0 B/s</span>
+                        </div>
+                        <div class="bw-bar">
+                            <div class="bw-bar-fill in" id="bw-in-bar" style="width:0%"></div>
+                        </div>
+                    </div>
+                    <div class="bw-bar-container">
+                        <div class="bw-bar-label">
+                            <span>OUT</span>
+                            <span id="bw-out-val">0 B/s</span>
+                        </div>
+                        <div class="bw-bar">
+                            <div class="bw-bar-fill out" id="bw-out-bar" style="width:0%"></div>
+                        </div>
+                    </div>
+                    <canvas id="bw-chart"></canvas>
+                </div>
+            </div>
+
+            <!-- Connected Clients panel -->
+            <div class="panel">
+                <div class="panel-header">Connected Clients</div>
+                <div class="panel-body" id="client-list">
+                    <div class="empty-state">No clients connected</div>
+                </div>
+            </div>
+
+            <!-- Event Log panel -->
+            <div class="panel full-width">
+                <div class="panel-header">Event Log</div>
+                <div class="panel-body">
+                    <div class="log-area" id="log-area">
+                        <div class="empty-state">No events</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+    (function() {
+        var ws = null;
+        var bwHistory = { in: new Array(60).fill(0), out: new Array(60).fill(0) };
+        var bwMax = 1024;
+        var canvas = document.getElementById('bw-chart');
+        var ctx = canvas ? canvas.getContext('2d') : null;
+
+        function connect() {
+            var proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+            ws = new WebSocket(proto + '//' + location.host + '/ws');
+
+            ws.onopen = function() {
+                document.getElementById('ws-dot').classList.add('connected');
+            };
+
+            ws.onclose = function() {
+                document.getElementById('ws-dot').classList.remove('connected');
+                setTimeout(connect, 2000);
+            };
+
+            ws.onerror = function() {
+                ws.close();
+            };
+
+            ws.onmessage = function(ev) {
+                try {
+                    var msg = JSON.parse(ev.data);
+                    if (msg.type === 'stats') handleStats(msg);
+                } catch(e) {}
+            };
+        }
+
+        function formatBytes(b) {
+            if (b < 1024) return b + ' B/s';
+            if (b < 1048576) return (b / 1024).toFixed(1) + ' KB/s';
+            return (b / 1048576).toFixed(1) + ' MB/s';
+        }
+
+        function formatUptime(sec) {
+            var d = Math.floor(sec / 86400);
+            var h = Math.floor((sec % 86400) / 3600);
+            var m = Math.floor((sec % 3600) / 60);
+            var s = sec % 60;
+            if (d > 0) return d + 'd ' + h + 'h';
+            if (h > 0) return h + 'h ' + m + 'm';
+            return m + 'm ' + s + 's';
+        }
+
+        function speedStr(s) {
+            var speeds = ['LS', 'FS', 'HS', 'SS'];
+            return speeds[s] || '??';
+        }
+
+        function stateStr(s) {
+            var states = ['available', 'exported', 'error'];
+            return states[s] || 'available';
+        }
+
+        function ip4str(ip) {
+            if (!ip) return '';
+            return (ip & 0xff) + '.' + ((ip >> 8) & 0xff) + '.' +
+                   ((ip >> 16) & 0xff) + '.' + ((ip >> 24) & 0xff);
+        }
+
+        function handleStats(msg) {
+            // Update stat cards
+            var heapKB = msg.free_heap ? (msg.free_heap / 1024).toFixed(0) + ' KB' : '--';
+            document.getElementById('stat-heap').textContent = heapKB;
+            document.getElementById('stat-uptime').textContent =
+                msg.uptime_sec !== undefined ? formatUptime(msg.uptime_sec) : '--';
+
+            var devices = msg.devices || [];
+            document.getElementById('stat-devices').textContent = devices.length;
+
+            // Collect unique client IPs
+            var clientSet = {};
+            devices.forEach(function(d) {
+                if (d.state === 1 && d.client_ip) clientSet[d.client_ip] = true;
+            });
+            var clientIPs = Object.keys(clientSet);
+            document.getElementById('stat-clients').textContent = clientIPs.length;
+
+            // Update device list
+            var dl = document.getElementById('device-list');
+            if (devices.length === 0) {
+                dl.innerHTML = '<div class="empty-state">No USB devices connected</div>';
+            } else {
+                var html = '';
+                devices.forEach(function(d) {
+                    var st = stateStr(d.state);
+                    html += '<div class="device-item">';
+                    html += '<div class="status-dot ' + st + '"></div>';
+                    html += '<div class="device-info">';
+                    html += '<div class="busid">' + esc(d.path) + '</div>';
+                    html += '<div class="details">' +
+                        hex4(d.vid) + ':' + hex4(d.pid) + ' &middot; ' + speedStr(d.speed) +
+                        '</div>';
+                    if (d.state === 1 && d.client_ip) {
+                        html += '<div class="client">Client: ' + ip4str(d.client_ip) + '</div>';
+                    }
+                    html += '</div>';
+                    html += '<div class="device-actions">';
+                    html += '<button onclick="toggleExport(\'' + esc(d.path) + '\')">' +
+                        (d.state === 1 ? 'Release' : 'Export') + '</button>';
+                    html += '</div>';
+                    html += '</div>';
+                });
+                dl.innerHTML = html;
+            }
+
+            // Update clients panel
+            var cl = document.getElementById('client-list');
+            if (clientIPs.length === 0) {
+                cl.innerHTML = '<div class="empty-state">No clients connected</div>';
+            } else {
+                var ch = '';
+                clientIPs.forEach(function(ipNum) {
+                    ch += '<div class="client-item"><span class="client-ip">' +
+                        ip4str(parseInt(ipNum)) + '</span></div>';
+                });
+                cl.innerHTML = ch;
+            }
+
+            // Update bandwidth
+            var bwIn = msg.bw_in || 0;
+            var bwOut = msg.bw_out || 0;
+            bwHistory.in.push(bwIn); bwHistory.in.shift();
+            bwHistory.out.push(bwOut); bwHistory.out.shift();
+            bwMax = Math.max(1024, Math.max.apply(null, bwHistory.in), Math.max.apply(null, bwHistory.out));
+
+            document.getElementById('bw-in-val').textContent = formatBytes(bwIn);
+            document.getElementById('bw-out-val').textContent = formatBytes(bwOut);
+            document.getElementById('bw-in-bar').style.width = Math.min(100, (bwIn / bwMax) * 100) + '%';
+            document.getElementById('bw-out-bar').style.width = Math.min(100, (bwOut / bwMax) * 100) + '%';
+
+            drawChart();
+
+            // Update log
+            if (msg.logs && msg.logs.length > 0) {
+                var la = document.getElementById('log-area');
+                var levels = ['debug', 'info', 'warn', 'error'];
+                var html = '';
+                msg.logs.forEach(function(l) {
+                    var lvl = levels[l.level] || 'info';
+                    var ts = (l.ts / 1000000).toFixed(1);
+                    html += '<div class="log-entry ' + lvl + '">' +
+                        '<span class="ts">[' + ts + 's]</span>' +
+                        '<span class="msg">' + esc(l.msg) + '</span></div>';
+                });
+                la.innerHTML = html;
+                la.scrollTop = la.scrollHeight;
+            }
+        }
+
+        function drawChart() {
+            if (!ctx || !canvas) return;
+            var w = canvas.parentElement.clientWidth;
+            canvas.width = w;
+            canvas.height = 120;
+
+            ctx.clearRect(0, 0, w, 120);
+
+            // Grid lines
+            ctx.strokeStyle = '#334155';
+            ctx.lineWidth = 0.5;
+            for (var y = 0; y < 120; y += 30) {
+                ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(w, y); ctx.stroke();
+            }
+
+            var step = w / 59;
+
+            // IN line
+            ctx.strokeStyle = '#38bdf8';
+            ctx.lineWidth = 1.5;
+            ctx.beginPath();
+            for (var i = 0; i < 60; i++) {
+                var x = i * step;
+                var y = 118 - (bwHistory.in[i] / bwMax) * 116;
+                if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+            }
+            ctx.stroke();
+
+            // OUT line
+            ctx.strokeStyle = '#4ade80';
+            ctx.beginPath();
+            for (var i = 0; i < 60; i++) {
+                var x = i * step;
+                var y = 118 - (bwHistory.out[i] / bwMax) * 116;
+                if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+            }
+            ctx.stroke();
+        }
+
+        function hex4(v) {
+            return ('0000' + (v || 0).toString(16)).slice(-4);
+        }
+
+        function esc(s) {
+            if (!s) return '';
+            var d = document.createElement('div');
+            d.textContent = s;
+            return d.innerHTML;
+        }
+
+        window.toggleExport = function(busid) {
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({action: 'toggle_export', busid: busid}));
+            }
+        };
+
+        connect();
+    })();
+    </script>
 </body>
 </html>
