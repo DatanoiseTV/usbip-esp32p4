@@ -11,4 +11,6 @@ idf_component_register(
         access_control
         nvs_flash
         esp_psram
+        esp_system
+        heap
 )

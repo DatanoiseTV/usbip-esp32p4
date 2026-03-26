@@ -8,6 +8,8 @@
 #include "esp_err.h"
 #include "nvs_flash.h"
 #include "esp_psram.h"
+#include "esp_system.h"
+#include "esp_heap_caps.h"
 
 #include "event_log.h"
 #include "access_control.h"
@@ -22,6 +24,10 @@ static const char *TAG = "main";
 void app_main(void)
 {
     esp_err_t ret;
+
+    /* Log CPU frequency */
+    uint32_t cpu_freq_mhz = CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ;
+    ESP_LOGI(TAG, "CPU frequency: %lu MHz", (unsigned long)cpu_freq_mhz);
 
     /* Initialize NVS */
     ret = nvs_flash_init();
@@ -62,5 +68,14 @@ void app_main(void)
     ESP_ERROR_CHECK(webui_init());
     ESP_LOGI(TAG, "Web UI initialized");
 
-    ESP_LOGI(TAG, "USB/IP server ready");
+    /* Log free heap after all init */
+    size_t free_heap = esp_get_free_heap_size();
+    size_t free_internal = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
+    ESP_LOGI(TAG, "Free heap: %u bytes (internal: %u bytes)", (unsigned)free_heap, (unsigned)free_internal);
+
+    /* Initial event log entry */
+    event_log_add(EVENT_LOG_LEVEL_INFO, "System started: CPU %lu MHz, PSRAM %.1f MB, free heap %u bytes",
+                  (unsigned long)cpu_freq_mhz, (float)psram_size / (1024.0f * 1024.0f), (unsigned)free_heap);
+
+    ESP_LOGI(TAG, "USB/IP server ready. Connect via: usbip list -r <ip>");
 }
