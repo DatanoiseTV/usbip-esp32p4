@@ -43,6 +43,22 @@ usb_device_handle_t usb_host_mgr_get_handle(uint8_t dev_addr);
  */
 usb_host_client_handle_t usb_host_mgr_get_client_handle(void);
 
+/**
+ * @brief Claim all interfaces of a device
+ *
+ * Must be called before submitting non-control transfers.
+ * @param dev_addr USB device address
+ * @return ESP_OK on success
+ */
+esp_err_t usb_host_mgr_claim_interfaces(uint8_t dev_addr);
+
+/**
+ * @brief Release all claimed interfaces of a device
+ * @param dev_addr USB device address
+ * @return ESP_OK on success
+ */
+esp_err_t usb_host_mgr_release_interfaces(uint8_t dev_addr);
+
 #ifdef __cplusplus
 }
 #endif

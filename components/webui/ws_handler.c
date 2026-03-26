@@ -7,6 +7,8 @@
 #include "esp_http_server.h"
 #include "esp_system.h"
 #include "esp_timer.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/portmacro.h"
 #include "device_manager.h"
 #include "event_log.h"
 
@@ -20,6 +22,7 @@ static const char *TAG = "ws_handler";
 /* Internal state */
 static int ws_fds[WS_MAX_CLIENTS];
 static httpd_handle_t ws_server_handle;
+static portMUX_TYPE ws_fds_lock = portMUX_INITIALIZER_UNLOCKED;
 
 void ws_handler_init(httpd_handle_t server)
 {
@@ -32,28 +35,37 @@ void ws_handler_init(httpd_handle_t server)
 
 static void ws_register_fd(int fd)
 {
+    portENTER_CRITICAL(&ws_fds_lock);
     for (int i = 0; i < WS_MAX_CLIENTS; i++) {
-        if (ws_fds[i] == fd) return; /* already registered */
+        if (ws_fds[i] == fd) {
+            portEXIT_CRITICAL(&ws_fds_lock);
+            return; /* already registered */
+        }
     }
     for (int i = 0; i < WS_MAX_CLIENTS; i++) {
         if (ws_fds[i] < 0) {
             ws_fds[i] = fd;
+            portEXIT_CRITICAL(&ws_fds_lock);
             ESP_LOGI(TAG, "WS client registered fd=%d slot=%d", fd, i);
             return;
         }
     }
+    portEXIT_CRITICAL(&ws_fds_lock);
     ESP_LOGW(TAG, "WS client slots full, rejecting fd=%d", fd);
 }
 
 static void ws_unregister_fd(int fd)
 {
+    portENTER_CRITICAL(&ws_fds_lock);
     for (int i = 0; i < WS_MAX_CLIENTS; i++) {
         if (ws_fds[i] == fd) {
             ws_fds[i] = -1;
+            portEXIT_CRITICAL(&ws_fds_lock);
             ESP_LOGI(TAG, "WS client unregistered fd=%d slot=%d", fd, i);
             return;
         }
     }
+    portEXIT_CRITICAL(&ws_fds_lock);
 }
 
 /* Build device JSON fragment into buf. Returns chars written. */
@@ -130,17 +142,25 @@ static int build_logs_json(char *buf, int buflen)
 
 void ws_broadcast_stats(void)
 {
-    /* Check if any clients are connected */
+    /* Snapshot fds under lock */
+    int fds[WS_MAX_CLIENTS];
+    portENTER_CRITICAL(&ws_fds_lock);
     bool has_clients = false;
     for (int i = 0; i < WS_MAX_CLIENTS; i++) {
-        if (ws_fds[i] >= 0) { has_clients = true; break; }
+        fds[i] = ws_fds[i];
+        if (fds[i] >= 0) has_clients = true;
     }
+    portEXIT_CRITICAL(&ws_fds_lock);
     if (!has_clients) return;
 
-    /* Build the stats JSON message */
-    static char json_buf[4096];
+    /* Build the stats JSON message on the stack */
+    char *json_buf = malloc(4096);
+    if (!json_buf) {
+        ESP_LOGW(TAG, "ws_broadcast_stats: OOM");
+        return;
+    }
     int pos = 0;
-    int buflen = sizeof(json_buf);
+    int buflen = 4096;
 
     uint32_t free_heap = esp_get_free_heap_size();
     int64_t uptime_us = esp_timer_get_time();
@@ -167,13 +187,15 @@ void ws_broadcast_stats(void)
     };
 
     for (int i = 0; i < WS_MAX_CLIENTS; i++) {
-        if (ws_fds[i] < 0) continue;
-        esp_err_t ret = httpd_ws_send_frame_async(ws_server_handle, ws_fds[i], &frame);
+        if (fds[i] < 0) continue;
+        esp_err_t ret = httpd_ws_send_frame_async(ws_server_handle, fds[i], &frame);
         if (ret != ESP_OK) {
-            ESP_LOGW(TAG, "WS send failed fd=%d: %s, unregistering", ws_fds[i], esp_err_to_name(ret));
-            ws_unregister_fd(ws_fds[i]);
+            ESP_LOGW(TAG, "WS send failed fd=%d: %s, unregistering", fds[i], esp_err_to_name(ret));
+            ws_unregister_fd(fds[i]);
         }
     }
+
+    free(json_buf);
 }
 
 /* Handle incoming WS messages */

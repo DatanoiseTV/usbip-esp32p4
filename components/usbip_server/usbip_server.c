@@ -8,6 +8,7 @@
 #include "usbip_proto.h"
 #include "event_log.h"
 #include "esp_log.h"
+#include "esp_heap_caps.h"
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -92,6 +93,16 @@ static void usbip_server_task(void *arg)
         uint32_t client_ip = client_addr.sin_addr.s_addr;
         char ip_str[16];
         ip4_to_str(client_ip, ip_str, sizeof(ip_str));
+
+        /* Memory pressure check */
+        size_t free_internal = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
+        if (free_internal < 32 * 1024) {
+            ESP_LOGW(TAG, "Low memory (%u bytes free), rejecting connection from %s",
+                     (unsigned)free_internal, ip_str);
+            event_log_add(EVENT_LOG_LEVEL_WARN, "Rejected connection from %s: low memory", ip_str);
+            close(client_fd);
+            continue;
+        }
 
         /* Access control check */
         if (!access_control_check(client_ip)) {

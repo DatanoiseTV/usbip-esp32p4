@@ -5,6 +5,7 @@ idf_component_register(
         network_mgr
         usb_host_mgr
         device_manager
+        transfer_engine
         usbip_server
         webui
         event_log

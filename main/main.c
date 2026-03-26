@@ -16,6 +16,7 @@
 #include "device_manager.h"
 #include "network_mgr.h"
 #include "usb_host_mgr.h"
+#include "transfer_engine.h"
 #include "usbip_server.h"
 #include "webui.h"
 
@@ -61,6 +62,9 @@ void app_main(void)
 
     ESP_ERROR_CHECK(usb_host_mgr_init());
     ESP_LOGI(TAG, "USB host manager initialized");
+
+    ESP_ERROR_CHECK(transfer_engine_init());
+    ESP_LOGI(TAG, "Transfer engine initialized");
 
     ESP_ERROR_CHECK(usbip_server_init());
     ESP_LOGI(TAG, "USB/IP server initialized");

@@ -78,7 +78,7 @@ static esp_err_t handle_api_devices(httpd_req_t *req)
     httpd_resp_set_type(req, "application/json");
 
     /* Build JSON array of devices */
-    static char json_buf[2048];
+    char json_buf[2048];
     int pos = 0;
     int buflen = sizeof(json_buf);
 
@@ -137,7 +137,7 @@ static esp_err_t handle_api_logs(httpd_req_t *req)
 {
     httpd_resp_set_type(req, "application/json");
 
-    static char json_buf[4096];
+    char json_buf[4096];
     int pos = 0;
     int buflen = sizeof(json_buf);
 

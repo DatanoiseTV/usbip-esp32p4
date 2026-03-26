@@ -7,6 +7,7 @@
 #include "usbip_proto.h"
 #include "device_manager.h"
 #include "transfer_engine.h"
+#include "usb_host_mgr.h"
 #include "event_log.h"
 #include "esp_log.h"
 
@@ -49,7 +50,7 @@ static void fill_usb_device(usbip_usb_device_t *udev, const dm_device_info_t *in
     udev->bDeviceProtocol   = info->dev_protocol;
     udev->bConfigurationValue = 1;
     udev->bNumConfigurations  = info->num_configurations;
-    udev->bNumInterfaces      = 1; /* Default: at least one interface */
+    udev->bNumInterfaces      = info->num_interfaces > 0 ? info->num_interfaces : 1;
 }
 
 /* Format IPv4 address for logging */
@@ -87,17 +88,20 @@ static bool devlist_send_device_cb(int index, const dm_device_info_t *info, void
         return false;
     }
 
-    /* Send one interface descriptor (default) */
-    usbip_usb_interface_t iface = {
-        .bInterfaceClass    = info->dev_class,
-        .bInterfaceSubClass = info->dev_subclass,
-        .bInterfaceProtocol = info->dev_protocol,
-        .padding            = 0,
-    };
+    /* Send interface descriptors matching bNumInterfaces */
+    int num_ifaces = info->num_interfaces > 0 ? info->num_interfaces : 1;
+    for (int i = 0; i < num_ifaces; i++) {
+        usbip_usb_interface_t iface = {
+            .bInterfaceClass    = info->interfaces[i].bInterfaceClass,
+            .bInterfaceSubClass = info->interfaces[i].bInterfaceSubClass,
+            .bInterfaceProtocol = info->interfaces[i].bInterfaceProtocol,
+            .padding            = 0,
+        };
 
-    if (usbip_net_send(ctx->fd, &iface, sizeof(iface)) < 0) {
-        ctx->ok = false;
-        return false;
+        if (usbip_net_send(ctx->fd, &iface, sizeof(iface)) < 0) {
+            ctx->ok = false;
+            return false;
+        }
     }
 
     return true; /* Continue iteration */
@@ -222,10 +226,14 @@ static int handle_import(int fd, uint16_t client_version, uint32_t client_ip)
     ESP_LOGI(TAG, "Device '%s' imported successfully, entering transfer loop", req.busid);
     event_log_add(EVENT_LOG_LEVEL_INFO, "Device %s imported", req.busid);
 
+    /* Claim all interfaces before non-control transfers */
+    usb_host_mgr_claim_interfaces(info.dev_addr);
+
     /* Enter the URB transfer loop (blocks until done) */
     transfer_engine_run(fd, req.busid);
 
-    /* Transfer loop ended - release the device */
+    /* Release interfaces and the device */
+    usb_host_mgr_release_interfaces(info.dev_addr);
     device_manager_release(dev_index);
     ESP_LOGI(TAG, "Transfer loop ended for device '%s'", req.busid);
     event_log_add(EVENT_LOG_LEVEL_INFO, "Device %s released (transfer ended)", req.busid);

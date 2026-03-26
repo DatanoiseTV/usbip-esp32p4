@@ -163,7 +163,31 @@ static void handle_new_device(uint8_t dev_addr)
     dm_info.dev_protocol       = dev_desc->bDeviceProtocol;
     dm_info.num_configurations = dev_desc->bNumConfigurations;
 
-    /* 7. Add to device_manager */
+    /* 7. Populate interface descriptors from config descriptor */
+    if (config_desc) {
+        int offset = 0;
+        int iface_count = 0;
+        const usb_standard_desc_t *cur = (const usb_standard_desc_t *)config_desc;
+        while ((cur = usb_parse_next_descriptor_of_type(
+                    cur, config_desc->wTotalLength,
+                    USB_B_DESCRIPTOR_TYPE_INTERFACE, &offset)) != NULL) {
+            const usb_intf_desc_t *intf = (const usb_intf_desc_t *)cur;
+            /* Only record alternate setting 0 for each interface */
+            if (intf->bAlternateSetting == 0 && iface_count < DEVICE_MANAGER_MAX_INTERFACES) {
+                dm_info.interfaces[iface_count].bInterfaceClass    = intf->bInterfaceClass;
+                dm_info.interfaces[iface_count].bInterfaceSubClass = intf->bInterfaceSubClass;
+                dm_info.interfaces[iface_count].bInterfaceProtocol = intf->bInterfaceProtocol;
+                iface_count++;
+            }
+            ESP_LOGI(TAG, "  Interface %d: class=%d subclass=%d protocol=%d endpoints=%d",
+                     intf->bInterfaceNumber, intf->bInterfaceClass,
+                     intf->bInterfaceSubClass, intf->bInterfaceProtocol,
+                     intf->bNumEndpoints);
+        }
+        dm_info.num_interfaces = iface_count > 0 ? iface_count : 1;
+    }
+
+    /* 8. Add to device_manager */
     int dm_idx = -1;
     err = device_manager_add(&dm_info, &dm_idx);
     if (err != ESP_OK) {
@@ -171,21 +195,6 @@ static void handle_new_device(uint8_t dev_addr)
         /* Still keep it tracked so we can close it on disconnect */
     } else {
         ESP_LOGI(TAG, "Device added to device_manager at index %d, busid=%s", dm_idx, dm_info.path);
-    }
-
-    /* 8. Log interface descriptors from config descriptor */
-    if (config_desc) {
-        int offset = 0;
-        const usb_standard_desc_t *cur = (const usb_standard_desc_t *)config_desc;
-        while ((cur = usb_parse_next_descriptor_of_type(
-                    cur, config_desc->wTotalLength,
-                    USB_B_DESCRIPTOR_TYPE_INTERFACE, &offset)) != NULL) {
-            const usb_intf_desc_t *intf = (const usb_intf_desc_t *)cur;
-            ESP_LOGI(TAG, "  Interface %d: class=%d subclass=%d protocol=%d endpoints=%d",
-                     intf->bInterfaceNumber, intf->bInterfaceClass,
-                     intf->bInterfaceSubClass, intf->bInterfaceProtocol,
-                     intf->bNumEndpoints);
-        }
     }
 
     event_log_add(EVENT_LOG_LEVEL_INFO, "USB device connected: addr=%d VID=%04x PID=%04x",
@@ -420,4 +429,81 @@ usb_device_handle_t usb_host_mgr_get_handle(uint8_t dev_addr)
 usb_host_client_handle_t usb_host_mgr_get_client_handle(void)
 {
     return s_client_hdl;
+}
+
+esp_err_t usb_host_mgr_claim_interfaces(uint8_t dev_addr)
+{
+    usb_device_handle_t dev_hdl = usb_host_mgr_get_handle(dev_addr);
+    if (!dev_hdl) {
+        ESP_LOGE(TAG, "claim_interfaces: no handle for addr %d", dev_addr);
+        return ESP_ERR_NOT_FOUND;
+    }
+
+    const usb_config_desc_t *config_desc = NULL;
+    esp_err_t err = usb_host_get_active_config_descriptor(dev_hdl, &config_desc);
+    if (err != ESP_OK || !config_desc) {
+        ESP_LOGE(TAG, "claim_interfaces: failed to get config desc: %s", esp_err_to_name(err));
+        return err;
+    }
+
+    int offset = 0;
+    const usb_standard_desc_t *cur = (const usb_standard_desc_t *)config_desc;
+    while ((cur = usb_parse_next_descriptor_of_type(
+                cur, config_desc->wTotalLength,
+                USB_B_DESCRIPTOR_TYPE_INTERFACE, &offset)) != NULL) {
+        const usb_intf_desc_t *intf = (const usb_intf_desc_t *)cur;
+        if (intf->bAlternateSetting != 0) {
+            continue;
+        }
+        err = usb_host_interface_claim(s_client_hdl, dev_hdl,
+                                       intf->bInterfaceNumber, 0);
+        if (err != ESP_OK) {
+            ESP_LOGW(TAG, "Failed to claim interface %d: %s",
+                     intf->bInterfaceNumber, esp_err_to_name(err));
+            /* Continue claiming other interfaces */
+        } else {
+            ESP_LOGI(TAG, "Claimed interface %d on addr %d",
+                     intf->bInterfaceNumber, dev_addr);
+        }
+    }
+
+    return ESP_OK;
+}
+
+esp_err_t usb_host_mgr_release_interfaces(uint8_t dev_addr)
+{
+    usb_device_handle_t dev_hdl = usb_host_mgr_get_handle(dev_addr);
+    if (!dev_hdl) {
+        ESP_LOGW(TAG, "release_interfaces: no handle for addr %d", dev_addr);
+        return ESP_ERR_NOT_FOUND;
+    }
+
+    const usb_config_desc_t *config_desc = NULL;
+    esp_err_t err = usb_host_get_active_config_descriptor(dev_hdl, &config_desc);
+    if (err != ESP_OK || !config_desc) {
+        ESP_LOGW(TAG, "release_interfaces: failed to get config desc: %s", esp_err_to_name(err));
+        return err;
+    }
+
+    int offset = 0;
+    const usb_standard_desc_t *cur = (const usb_standard_desc_t *)config_desc;
+    while ((cur = usb_parse_next_descriptor_of_type(
+                cur, config_desc->wTotalLength,
+                USB_B_DESCRIPTOR_TYPE_INTERFACE, &offset)) != NULL) {
+        const usb_intf_desc_t *intf = (const usb_intf_desc_t *)cur;
+        if (intf->bAlternateSetting != 0) {
+            continue;
+        }
+        err = usb_host_interface_release(s_client_hdl, dev_hdl,
+                                         intf->bInterfaceNumber);
+        if (err != ESP_OK) {
+            ESP_LOGW(TAG, "Failed to release interface %d: %s",
+                     intf->bInterfaceNumber, esp_err_to_name(err));
+        } else {
+            ESP_LOGD(TAG, "Released interface %d on addr %d",
+                     intf->bInterfaceNumber, dev_addr);
+        }
+    }
+
+    return ESP_OK;
 }

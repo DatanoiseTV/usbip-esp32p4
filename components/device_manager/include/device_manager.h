@@ -15,6 +15,9 @@ extern "C" {
 /** Maximum number of tracked USB devices */
 #define DEVICE_MANAGER_MAX_DEVICES  CONFIG_USBIP_MAX_DEVICES
 
+/** Maximum number of interfaces per device */
+#define DEVICE_MANAGER_MAX_INTERFACES 16
+
 /** Device export states */
 typedef enum {
     DEV_STATE_AVAILABLE = 0,   /**< Plugged in, not exported */
@@ -30,6 +33,13 @@ typedef enum {
     DEV_SPEED_SUPER,
 } device_speed_t;
 
+/** Per-interface descriptor info (for DEVLIST reply) */
+typedef struct {
+    uint8_t bInterfaceClass;
+    uint8_t bInterfaceSubClass;
+    uint8_t bInterfaceProtocol;
+} dm_interface_info_t;
+
 /** Device information record */
 typedef struct {
     bool     in_use;              /**< Slot is occupied */
@@ -42,10 +52,12 @@ typedef struct {
     uint8_t  dev_subclass;       /**< USB subclass */
     uint8_t  dev_protocol;       /**< USB protocol */
     uint8_t  num_configurations; /**< Number of configurations */
+    uint8_t  num_interfaces;     /**< Number of interfaces in active config */
     device_speed_t speed;        /**< Device speed */
     device_state_t state;        /**< Current state */
     uint32_t client_ip;          /**< IP of importing client (if exported) */
     char     path[32];           /**< Bus ID string e.g. "1-1" */
+    dm_interface_info_t interfaces[DEVICE_MANAGER_MAX_INTERFACES]; /**< Interface descriptors */
 } dm_device_info_t;
 
 /**
