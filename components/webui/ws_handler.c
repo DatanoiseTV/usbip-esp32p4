@@ -241,8 +241,10 @@ static void handle_ws_message(const char *data, int len)
 esp_err_t ws_handler(httpd_req_t *req)
 {
     if (req->method == HTTP_GET) {
-        /* This is the initial WS handshake GET */
-        ESP_LOGI(TAG, "WS handshake from fd=%d", httpd_req_to_sockfd(req));
+        /* This is the initial WS handshake GET - register client for broadcasts */
+        int fd = httpd_req_to_sockfd(req);
+        ESP_LOGI(TAG, "WS handshake from fd=%d", fd);
+        ws_register_fd(fd);
         return ESP_OK;
     }
 
