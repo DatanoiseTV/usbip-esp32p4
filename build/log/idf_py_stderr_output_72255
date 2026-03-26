@@ -1,0 +1,15 @@
+Command: cmake -G Ninja -DPYTHON_DEPS_CHECKED=1 -DPYTHON=/Users/dev/.espressif/python_env/idf5.5_py3.14_env/bin/python -DESP_PLATFORM=1 -DIDF_TARGET=esp32p4 -DCCACHE_ENABLE=0 /Users/dev/dev/usbip-esp32p4
+fatal: not a git repository (or any of the parent directories): .git
+CMake Error at build/CMakeFiles/git-data/grabRef.cmake:48 (file):
+  file failed to open for reading (No such file or directory):
+
+    /Users/dev/dev/usbip-esp32p4/build/CMakeFiles/git-data/head-ref
+Call Stack (most recent call first):
+  /Users/dev/.espressif/v5.5.3/esp-idf/tools/cmake/third_party/GetGitRevisionDescription.cmake:83 (include)
+  /Users/dev/.espressif/v5.5.3/esp-idf/tools/cmake/third_party/GetGitRevisionDescription.cmake:93 (get_git_head_revision)
+  /Users/dev/.espressif/v5.5.3/esp-idf/tools/cmake/project.cmake:720 (git_describe)
+  CMakeLists.txt:8 (project)
+
+
+fatal: not a git repository (or any of the parent directories): .git
+fatal: not a git repository: /Users/dev/.espressif/v5.5.3/esp-idf/components/openthread/openthread/../../../.git/modules/components/openthread/openthread

@@ -1,0 +1,27 @@
+menu "USB/IP Server Configuration"
+
+    config USBIP_TCP_PORT
+        int "USB/IP TCP port"
+        default 3240
+        help
+            TCP port number for the USB/IP server to listen on.
+
+    config USBIP_MAX_DEVICES
+        int "Maximum number of USB devices"
+        default 8
+        help
+            Maximum number of USB devices that can be exported.
+
+    config USBIP_MAX_CLIENTS
+        int "Maximum number of concurrent clients"
+        default 4
+        help
+            Maximum number of concurrent USB/IP client connections.
+
+    config USBIP_HOSTNAME
+        string "mDNS hostname"
+        default "usbip-esp32p4"
+        help
+            Hostname used for mDNS advertisement.
+
+endmenu
