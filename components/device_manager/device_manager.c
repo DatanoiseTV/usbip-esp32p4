@@ -13,7 +13,7 @@
 static const char *TAG = "dev_mgr";
 
 static struct {
-    usb_device_info_t devices[CONFIG_USBIP_MAX_DEVICES];
+    dm_device_info_t devices[CONFIG_USBIP_MAX_DEVICES];
     SemaphoreHandle_t mutex;
     bool initialized;
 } s_devmgr = {0};
@@ -49,7 +49,7 @@ esp_err_t device_manager_init(void)
     return ESP_OK;
 }
 
-esp_err_t device_manager_add(const usb_device_info_t *info, int *out_index)
+esp_err_t device_manager_add(const dm_device_info_t *info, int *out_index)
 {
     if (!s_devmgr.initialized || info == NULL) {
         return ESP_ERR_INVALID_STATE;
@@ -72,7 +72,7 @@ esp_err_t device_manager_add(const usb_device_info_t *info, int *out_index)
         return ESP_ERR_NO_MEM;
     }
 
-    memcpy(&s_devmgr.devices[slot], info, sizeof(usb_device_info_t));
+    memcpy(&s_devmgr.devices[slot], info, sizeof(dm_device_info_t));
     s_devmgr.devices[slot].in_use = true;
     s_devmgr.devices[slot].state = DEV_STATE_AVAILABLE;
 
@@ -107,12 +107,12 @@ esp_err_t device_manager_remove(int index)
         return ESP_ERR_NOT_FOUND;
     }
 
-    usb_device_info_t *dev = &s_devmgr.devices[index];
+    dm_device_info_t *dev = &s_devmgr.devices[index];
     ESP_LOGI(TAG, "Removing device [%d]: VID=%04x PID=%04x path=%s",
              index, dev->vendor_id, dev->product_id, dev->path);
     event_log_add(EVENT_LOG_LEVEL_INFO, "USB device removed: path=%s", dev->path);
 
-    memset(dev, 0, sizeof(usb_device_info_t));
+    memset(dev, 0, sizeof(dm_device_info_t));
 
     give_lock();
     return ESP_OK;
@@ -139,7 +139,7 @@ esp_err_t device_manager_lookup(const char *path, int *out_index)
     return ESP_ERR_NOT_FOUND;
 }
 
-esp_err_t device_manager_get(int index, usb_device_info_t *out_info)
+esp_err_t device_manager_get(int index, dm_device_info_t *out_info)
 {
     if (!s_devmgr.initialized || out_info == NULL) {
         return ESP_ERR_INVALID_ARG;
@@ -156,7 +156,7 @@ esp_err_t device_manager_get(int index, usb_device_info_t *out_info)
         return ESP_ERR_NOT_FOUND;
     }
 
-    memcpy(out_info, &s_devmgr.devices[index], sizeof(usb_device_info_t));
+    memcpy(out_info, &s_devmgr.devices[index], sizeof(dm_device_info_t));
     give_lock();
     return ESP_OK;
 }
@@ -173,7 +173,7 @@ esp_err_t device_manager_import(int index, uint32_t client_ip)
         return ESP_ERR_TIMEOUT;
     }
 
-    usb_device_info_t *dev = &s_devmgr.devices[index];
+    dm_device_info_t *dev = &s_devmgr.devices[index];
     if (!dev->in_use) {
         give_lock();
         return ESP_ERR_NOT_FOUND;
@@ -210,7 +210,7 @@ esp_err_t device_manager_release(int index)
         return ESP_ERR_TIMEOUT;
     }
 
-    usb_device_info_t *dev = &s_devmgr.devices[index];
+    dm_device_info_t *dev = &s_devmgr.devices[index];
     if (!dev->in_use) {
         give_lock();
         return ESP_ERR_NOT_FOUND;
@@ -247,7 +247,7 @@ int device_manager_get_count(void)
     return count;
 }
 
-void device_manager_foreach(bool (*callback)(int index, const usb_device_info_t *info, void *user_data), void *user_data)
+void device_manager_foreach(bool (*callback)(int index, const dm_device_info_t *info, void *user_data), void *user_data)
 {
     if (!s_devmgr.initialized || callback == NULL) {
         return;

@@ -46,7 +46,7 @@ typedef struct {
     device_state_t state;        /**< Current state */
     uint32_t client_ip;          /**< IP of importing client (if exported) */
     char     path[32];           /**< Bus ID string e.g. "1-1" */
-} usb_device_info_t;
+} dm_device_info_t;
 
 /**
  * @brief Initialize the device manager
@@ -60,7 +60,7 @@ esp_err_t device_manager_init(void);
  * @param[out] out_index Index assigned to the device
  * @return ESP_OK on success, ESP_ERR_NO_MEM if registry full
  */
-esp_err_t device_manager_add(const usb_device_info_t *info, int *out_index);
+esp_err_t device_manager_add(const dm_device_info_t *info, int *out_index);
 
 /**
  * @brief Remove a device from the registry
@@ -83,7 +83,7 @@ esp_err_t device_manager_lookup(const char *path, int *out_index);
  * @param[out] out_info Copy of device info
  * @return ESP_OK on success
  */
-esp_err_t device_manager_get(int index, usb_device_info_t *out_info);
+esp_err_t device_manager_get(int index, dm_device_info_t *out_info);
 
 /**
  * @brief Import (claim) a device for a client
@@ -111,7 +111,7 @@ int device_manager_get_count(void);
  * @param callback Function called for each device (return false to stop)
  * @param user_data Opaque pointer passed to callback
  */
-void device_manager_foreach(bool (*callback)(int index, const usb_device_info_t *info, void *user_data), void *user_data);
+void device_manager_foreach(bool (*callback)(int index, const dm_device_info_t *info, void *user_data), void *user_data);
 
 #ifdef __cplusplus
 }

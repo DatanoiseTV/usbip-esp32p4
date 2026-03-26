@@ -22,6 +22,13 @@ esp_err_t webui_init(void);
  */
 esp_err_t webui_stop(void);
 
+/**
+ * @brief Notify the web UI that the device list has changed
+ *
+ * This can be used to push updates to connected WebSocket clients.
+ */
+void webui_notify_device_change(void);
+
 #ifdef __cplusplus
 }
 #endif

@@ -18,3 +18,8 @@ esp_err_t webui_stop(void)
     ESP_LOGI(TAG, "Web UI stopped (stub)");
     return ESP_OK;
 }
+
+void webui_notify_device_change(void)
+{
+    ESP_LOGD(TAG, "Device change notification (stub)");
+}
