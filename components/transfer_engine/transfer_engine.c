@@ -267,7 +267,25 @@ static int handle_cmd_submit(int fd, usbip_header_t *hdr, const dm_device_info_t
     } else {
         /* Wait for completion */
         if (xSemaphoreTake(ctx.sem, pdMS_TO_TICKS(TRANSFER_TIMEOUT_MS)) != pdTRUE) {
-            ESP_LOGE(TAG, "Transfer timeout (seqnum=%lu)", (unsigned long)seqnum);
+            ESP_LOGE(TAG, "Transfer timeout (seqnum=%lu), aborting ep=0x%02x",
+                     (unsigned long)seqnum, xfer->bEndpointAddress);
+            /*
+             * Transfer is still in-flight on the USB hardware. We must abort it
+             * before freeing. For non-control endpoints: halt -> flush -> clear.
+             * The flush causes the callback to fire with CANCELED status.
+             */
+            if (!is_control && dev_handle) {
+                usb_host_endpoint_halt(dev_handle, xfer->bEndpointAddress);
+                usb_host_endpoint_flush(dev_handle, xfer->bEndpointAddress);
+                /* Wait for the canceled callback */
+                xSemaphoreTake(ctx.sem, pdMS_TO_TICKS(1000));
+                usb_host_endpoint_clear(dev_handle, xfer->bEndpointAddress);
+            } else {
+                /* For EP0 control: just wait longer - the USB stack's own timeout
+                 * should eventually complete it. If it doesn't, we're stuck. */
+                ESP_LOGW(TAG, "EP0 timeout - waiting for USB stack timeout");
+                xSemaphoreTake(ctx.sem, pdMS_TO_TICKS(6000));
+            }
             reply_status = -LINUX_ETIMEDOUT;
         } else {
             /* Map USB status */
