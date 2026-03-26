@@ -8,6 +8,7 @@ idf_component_register(
         usbip_server
         webui
         event_log
+        access_control
         nvs_flash
         esp_psram
 )
