@@ -101,14 +101,21 @@ static int build_devices_json(char *buf, int buflen)
     return pos;
 }
 
-/* Build recent log entries JSON fragment */
+/* Build recent log entries JSON fragment.
+ * Uses heap allocation to avoid blowing the esp_timer stack. */
 static int build_logs_json(char *buf, int buflen)
 {
     int pos = 0;
-    event_log_entry_t entries[20];
-    size_t count = 0;
+    #define LOG_BROADCAST_COUNT 10
 
-    event_log_get_recent(entries, 20, &count);
+    event_log_entry_t *entries = malloc(LOG_BROADCAST_COUNT * sizeof(event_log_entry_t));
+    if (!entries) {
+        pos += snprintf(buf + pos, buflen - pos, "[]");
+        return pos;
+    }
+
+    size_t count = 0;
+    event_log_get_recent(entries, LOG_BROADCAST_COUNT, &count);
 
     pos += snprintf(buf + pos, buflen - pos, "[");
     for (size_t i = 0; i < count; i++) {
@@ -137,7 +144,11 @@ static int build_logs_json(char *buf, int buflen)
             escaped);
     }
     pos += snprintf(buf + pos, buflen - pos, "]");
+
+    free(entries);
     return pos;
+
+    #undef LOG_BROADCAST_COUNT
 }
 
 void ws_broadcast_stats(void)
