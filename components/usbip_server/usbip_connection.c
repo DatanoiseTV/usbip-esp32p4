@@ -303,6 +303,8 @@ void usbip_connection_handle(void *arg)
     }
 
 done:
+    /* Safety: release any devices this client may have imported */
+    device_manager_release_by_ip(client_ip);
     close(fd);
     ESP_LOGI(TAG, "Connection handler exiting for %s (fd=%d)", ip_str, fd);
     event_log_add(EVENT_LOG_LEVEL_INFO, "Client disconnected: %s", ip_str);

@@ -178,9 +178,9 @@ esp_err_t device_manager_import(int index, uint32_t client_ip)
         give_lock();
         return ESP_ERR_NOT_FOUND;
     }
-    if (dev->state == DEV_STATE_EXPORTED) {
+    if (dev->state != DEV_STATE_AVAILABLE) {
         give_lock();
-        ESP_LOGW(TAG, "Device [%d] already exported", index);
+        ESP_LOGW(TAG, "Device [%d] not available (state=%d)", index, dev->state);
         return ESP_ERR_INVALID_STATE;
     }
 
@@ -245,6 +245,27 @@ int device_manager_get_count(void)
 
     give_lock();
     return count;
+}
+
+void device_manager_release_by_ip(uint32_t client_ip)
+{
+    if (!s_devmgr.initialized) {
+        return;
+    }
+    if (!take_lock()) {
+        return;
+    }
+
+    for (int i = 0; i < CONFIG_USBIP_MAX_DEVICES; i++) {
+        dm_device_info_t *dev = &s_devmgr.devices[i];
+        if (dev->in_use && dev->state == DEV_STATE_EXPORTED && dev->client_ip == client_ip) {
+            ESP_LOGW(TAG, "Safety release: device [%d] '%s' (client disconnected)", i, dev->path);
+            dev->state = DEV_STATE_AVAILABLE;
+            dev->client_ip = 0;
+        }
+    }
+
+    give_lock();
 }
 
 void device_manager_foreach(bool (*callback)(int index, const dm_device_info_t *info, void *user_data), void *user_data)

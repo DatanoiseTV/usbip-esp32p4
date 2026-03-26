@@ -113,6 +113,12 @@ esp_err_t device_manager_import(int index, uint32_t client_ip);
 esp_err_t device_manager_release(int index);
 
 /**
+ * @brief Release all devices exported to a specific client IP (safety cleanup)
+ * @param client_ip Client IP address
+ */
+void device_manager_release_by_ip(uint32_t client_ip);
+
+/**
  * @brief Get the count of currently registered devices
  * @return Number of devices
  */
