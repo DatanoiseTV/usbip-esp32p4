@@ -144,6 +144,9 @@ static int handle_cmd_submit(int fd, usbip_header_t *hdr, const dm_device_info_t
         memset(&reply, 0, sizeof(reply));
         reply.base.command   = USBIP_RET_SUBMIT;
         reply.base.seqnum    = seqnum;
+        reply.base.devid     = hdr->base.devid;
+        reply.base.direction = direction;
+        reply.base.ep        = ep;
         reply.u.ret_submit.status = -LINUX_EIO;
         usbip_pack_header(&reply, true);
         usbip_net_send(fd, &reply, sizeof(reply));
@@ -166,6 +169,9 @@ static int handle_cmd_submit(int fd, usbip_header_t *hdr, const dm_device_info_t
         memset(&reply, 0, sizeof(reply));
         reply.base.command   = USBIP_RET_SUBMIT;
         reply.base.seqnum    = seqnum;
+        reply.base.devid     = hdr->base.devid;
+        reply.base.direction = direction;
+        reply.base.ep        = ep;
         reply.u.ret_submit.status = -LINUX_EIO;
         usbip_pack_header(&reply, true);
         usbip_net_send(fd, &reply, sizeof(reply));
@@ -189,6 +195,9 @@ static int handle_cmd_submit(int fd, usbip_header_t *hdr, const dm_device_info_t
         memset(&reply, 0, sizeof(reply));
         reply.base.command   = USBIP_RET_SUBMIT;
         reply.base.seqnum    = seqnum;
+        reply.base.devid     = hdr->base.devid;
+        reply.base.direction = direction;
+        reply.base.ep        = ep;
         reply.u.ret_submit.status = -LINUX_ENODEV;
         usbip_pack_header(&reply, true);
         usbip_net_send(fd, &reply, sizeof(reply));
@@ -290,8 +299,8 @@ static int handle_cmd_submit(int fd, usbip_header_t *hdr, const dm_device_info_t
     reply.base.command              = USBIP_RET_SUBMIT;
     reply.base.seqnum               = seqnum;
     reply.base.devid                = hdr->base.devid;
-    reply.base.direction            = 0;
-    reply.base.ep                   = 0;
+    reply.base.direction            = direction;
+    reply.base.ep                   = ep;
     reply.u.ret_submit.status       = reply_status;
     reply.u.ret_submit.actual_length = actual_length;
     reply.u.ret_submit.start_frame  = 0;
@@ -337,17 +346,19 @@ static int handle_cmd_submit(int fd, usbip_header_t *hdr, const dm_device_info_t
         }
     }
 
-    /* Update stats - log transfer completion */
+    /* Log every transfer at INFO level for debugging */
     if (reply_status == 0) {
-        ESP_LOGD(TAG, "URB seqnum=%lu ep=0x%02x %s len=%ld ok",
+        ESP_LOGI(TAG, "URB seqnum=%lu ep=0x%02x %s len=%ld ok",
                  (unsigned long)seqnum,
                  (unsigned)(ep | (direction == USBIP_DIR_IN ? 0x80 : 0x00)),
                  direction == USBIP_DIR_IN ? "IN" : "OUT",
                  (long)actual_length);
     } else {
-        ESP_LOGW(TAG, "URB seqnum=%lu ep=0x%02x status=%ld",
+        ESP_LOGW(TAG, "URB seqnum=%lu ep=0x%02x %s len=%ld status=%ld",
                  (unsigned long)seqnum,
                  (unsigned)(ep | (direction == USBIP_DIR_IN ? 0x80 : 0x00)),
+                 direction == USBIP_DIR_IN ? "IN" : "OUT",
+                 (long)actual_length,
                  (long)reply_status);
     }
 
@@ -368,7 +379,7 @@ static int handle_cmd_unlink(int fd, usbip_header_t *hdr)
      */
     uint32_t seqnum = hdr->base.seqnum;
 
-    ESP_LOGD(TAG, "CMD_UNLINK seqnum=%lu unlink_seqnum=%lu",
+    ESP_LOGI(TAG, "CMD_UNLINK seqnum=%lu unlink_seqnum=%lu",
              (unsigned long)seqnum,
              (unsigned long)hdr->u.cmd_unlink.seqnum);
 
