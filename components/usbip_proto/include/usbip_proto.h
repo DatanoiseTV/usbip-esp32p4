@@ -150,6 +150,10 @@ typedef struct __attribute__((packed)) {
 
 /* Static size checks */
 _Static_assert(sizeof(usbip_op_common_t) == 8, "op_common must be 8 bytes");
+_Static_assert(sizeof(usbip_usb_device_t) == 312, "usb_device must be 312 bytes");
+_Static_assert(sizeof(usbip_usb_interface_t) == 4, "usb_interface must be 4 bytes");
+_Static_assert(sizeof(usbip_op_devlist_reply_t) == 4, "devlist_reply must be 4 bytes");
+_Static_assert(sizeof(usbip_op_import_request_t) == 32, "import_request must be 32 bytes");
 _Static_assert(sizeof(usbip_header_t) == 48, "header must be 48 bytes");
 _Static_assert(sizeof(usbip_iso_packet_descriptor_t) == 16, "iso_desc must be 16 bytes");
 

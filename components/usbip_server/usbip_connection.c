@@ -62,53 +62,32 @@ static void ip4_to_str(uint32_t ip_nbo, char *buf, size_t buflen)
 
 /* --- DEVLIST handler --- */
 
-/** Callback context for building the devlist reply */
+/**
+ * Snapshot callback: collects device info into an array under lock.
+ * This ensures ndev exactly matches the device descriptors sent.
+ */
 typedef struct {
-    int  fd;
-    uint16_t client_version;
-    bool ok;
-} devlist_send_ctx_t;
+    dm_device_info_t devices[CONFIG_USBIP_MAX_DEVICES];
+    int count;
+} devlist_snapshot_t;
 
-static bool devlist_send_device_cb(int index, const dm_device_info_t *info, void *user_data)
+static bool devlist_snapshot_cb(int index, const dm_device_info_t *info, void *user_data)
 {
-    devlist_send_ctx_t *ctx = (devlist_send_ctx_t *)user_data;
-    if (!ctx->ok) {
-        return false;
+    devlist_snapshot_t *snap = (devlist_snapshot_t *)user_data;
+    if (snap->count < CONFIG_USBIP_MAX_DEVICES) {
+        snap->devices[snap->count] = *info;
+        snap->count++;
     }
-
-    /* Build and send the USB device descriptor */
-    usbip_usb_device_t udev;
-    fill_usb_device(&udev, info);
-
-    /* Pack to network byte order */
-    usbip_pack_usb_device(&udev, true);
-
-    if (usbip_net_send(ctx->fd, &udev, sizeof(udev)) < 0) {
-        ctx->ok = false;
-        return false;
-    }
-
-    /* Send interface descriptors matching bNumInterfaces */
-    int num_ifaces = info->num_interfaces > 0 ? info->num_interfaces : 1;
-    for (int i = 0; i < num_ifaces; i++) {
-        usbip_usb_interface_t iface = {
-            .bInterfaceClass    = info->interfaces[i].bInterfaceClass,
-            .bInterfaceSubClass = info->interfaces[i].bInterfaceSubClass,
-            .bInterfaceProtocol = info->interfaces[i].bInterfaceProtocol,
-            .padding            = 0,
-        };
-
-        if (usbip_net_send(ctx->fd, &iface, sizeof(iface)) < 0) {
-            ctx->ok = false;
-            return false;
-        }
-    }
-
-    return true; /* Continue iteration */
+    return true;
 }
 
 static int handle_devlist(int fd, uint16_t client_version)
 {
+    /* Collect a snapshot of all devices atomically (foreach holds the lock) */
+    devlist_snapshot_t snap;
+    snap.count = 0;
+    device_manager_foreach(devlist_snapshot_cb, &snap);
+
     /* Send OP_REP_DEVLIST header */
     usbip_op_common_t reply_hdr = {
         .version = client_version,
@@ -121,10 +100,9 @@ static int handle_devlist(int fd, uint16_t client_version)
         return -1;
     }
 
-    /* Send device count */
-    int ndev = device_manager_get_count();
+    /* Send device count - guaranteed to match what follows (atomic snapshot) */
     usbip_op_devlist_reply_t reply_body = {
-        .ndev = (uint32_t)ndev,
+        .ndev = (uint32_t)snap.count,
     };
     usbip_pack_devlist_reply(&reply_body, true);
 
@@ -132,15 +110,35 @@ static int handle_devlist(int fd, uint16_t client_version)
         return -1;
     }
 
-    /* Send each device + its interfaces */
-    devlist_send_ctx_t ctx = {
-        .fd = fd,
-        .client_version = client_version,
-        .ok = true,
-    };
-    device_manager_foreach(devlist_send_device_cb, &ctx);
+    /* Send each device descriptor + interface descriptors */
+    for (int d = 0; d < snap.count; d++) {
+        const dm_device_info_t *info = &snap.devices[d];
 
-    return ctx.ok ? 0 : -1;
+        usbip_usb_device_t udev;
+        fill_usb_device(&udev, info);
+        usbip_pack_usb_device(&udev, true);
+
+        if (usbip_net_send(fd, &udev, sizeof(udev)) < 0) {
+            return -1;
+        }
+
+        /* Send bNumInterfaces interface descriptors (spec requires exactly this many) */
+        int num_ifaces = info->num_interfaces > 0 ? info->num_interfaces : 1;
+        for (int i = 0; i < num_ifaces; i++) {
+            usbip_usb_interface_t iface = {
+                .bInterfaceClass    = info->interfaces[i].bInterfaceClass,
+                .bInterfaceSubClass = info->interfaces[i].bInterfaceSubClass,
+                .bInterfaceProtocol = info->interfaces[i].bInterfaceProtocol,
+                .padding            = 0,
+            };
+
+            if (usbip_net_send(fd, &iface, sizeof(iface)) < 0) {
+                return -1;
+            }
+        }
+    }
+
+    return 0;
 }
 
 /* --- IMPORT handler --- */
