@@ -7,6 +7,13 @@
  *
  * On USB_HOST_CLIENT_EVENT_NEW_DEV  -> enumerate and add to device_manager
  * On USB_HOST_CLIENT_EVENT_DEV_GONE -> remove from device_manager and close
+ *
+ * String descriptors are read from ESP-IDF's enumeration cache (usb_device_info_t)
+ * rather than via control transfers, avoiding the deadlock that occurs when a
+ * synchronous transfer is submitted from the same task that calls
+ * usb_host_client_handle_events().
+ *
+ * Hub topology is derived from usb_device_info_t.parent when available.
  */
 
 #include "usb_host_mgr.h"
@@ -32,7 +39,6 @@ static const char *TAG = "usb_host";
 
 typedef struct {
     bool in_use;
-    bool needs_strings;  /* Deferred: read string descriptors outside event callback */
     uint8_t dev_addr;
     usb_device_handle_t dev_hdl;
 } tracked_device_t;
@@ -67,7 +73,6 @@ static int tracked_add(uint8_t dev_addr, usb_device_handle_t dev_hdl)
     for (int i = 0; i < MAX_TRACKED_DEVICES; i++) {
         if (!s_tracked[i].in_use) {
             s_tracked[i].in_use       = true;
-            s_tracked[i].needs_strings = true;
             s_tracked[i].dev_addr     = dev_addr;
             s_tracked[i].dev_hdl      = dev_hdl;
             return i;
@@ -105,87 +110,25 @@ static void tracked_remove(int idx)
 
 /* ---- String descriptor helper ---- */
 
-static void xfer_done_cb(usb_transfer_t *transfer)
-{
-    SemaphoreHandle_t sem = (SemaphoreHandle_t)transfer->context;
-    xSemaphoreGive(sem);
-}
-
 /**
- * Read a USB string descriptor and convert UTF-16LE to ASCII.
- * @param dev_hdl   Opened device handle
- * @param str_idx   String descriptor index (0 = skip)
+ * Convert a cached USB string descriptor (UTF-16LE) to ASCII.
+ * ESP-IDF v5.5+ caches string descriptors during enumeration in usb_device_info_t,
+ * so no control transfer is needed -- we just read the cached pointer.
+ *
+ * @param str_desc  Pointer to cached string descriptor (may be NULL)
  * @param out       Output buffer
  * @param out_len   Size of output buffer
  */
-static void read_string_descriptor(usb_device_handle_t dev_hdl, uint8_t str_idx,
+static void copy_string_descriptor(const usb_str_desc_t *str_desc,
                                    char *out, size_t out_len)
 {
-    if (str_idx == 0 || out_len == 0) {
+    if (!str_desc || out_len == 0) {
         return;
     }
 
-    usb_transfer_t *xfer = NULL;
-    esp_err_t err = usb_host_transfer_alloc(64 + sizeof(usb_setup_packet_t), 0, &xfer);
-    if (err != ESP_OK || !xfer) {
-        ESP_LOGW(TAG, "Failed to alloc transfer for string desc: %s", esp_err_to_name(err));
+    int bLength = str_desc->bLength;
+    if (bLength < 2 || str_desc->bDescriptorType != 0x03) {
         return;
-    }
-
-    SemaphoreHandle_t sem = xSemaphoreCreateBinary();
-    if (!sem) {
-        usb_host_transfer_free(xfer);
-        return;
-    }
-
-    /* Fill setup packet using ESP-IDF macro */
-    usb_setup_packet_t *setup = (usb_setup_packet_t *)xfer->data_buffer;
-    USB_SETUP_PACKET_INIT_GET_STR_DESC(setup, str_idx, 0x0409, 64);
-
-    xfer->num_bytes = sizeof(usb_setup_packet_t) + 64;
-    xfer->device_handle = dev_hdl;
-    xfer->bEndpointAddress = 0x00;
-    xfer->callback = xfer_done_cb;
-    xfer->context = sem;
-    xfer->timeout_ms = 1000;
-
-    err = usb_host_transfer_submit_control(s_client_hdl, xfer);
-    if (err != ESP_OK) {
-        ESP_LOGW(TAG, "Failed to submit string desc request (idx=%d): %s", str_idx, esp_err_to_name(err));
-        vSemaphoreDelete(sem);
-        usb_host_transfer_free(xfer);
-        return;
-    }
-
-    /* Wait for completion */
-    if (xSemaphoreTake(sem, pdMS_TO_TICKS(2000)) != pdTRUE) {
-        ESP_LOGW(TAG, "Timeout reading string descriptor idx=%d", str_idx);
-        vSemaphoreDelete(sem);
-        usb_host_transfer_free(xfer);
-        return;
-    }
-
-    vSemaphoreDelete(sem);
-
-    if (xfer->status != USB_TRANSFER_STATUS_COMPLETED) {
-        ESP_LOGW(TAG, "String descriptor transfer failed (idx=%d), status=%d", str_idx, xfer->status);
-        usb_host_transfer_free(xfer);
-        return;
-    }
-
-    /* Parse: data starts after 8-byte setup packet
-     * Byte 0 = bLength, Byte 1 = bDescriptorType (0x03), Bytes 2+ = UTF-16LE */
-    uint8_t *desc = xfer->data_buffer + sizeof(usb_setup_packet_t);
-    int actual_data = xfer->actual_num_bytes - sizeof(usb_setup_packet_t);
-    if (actual_data < 2 || desc[1] != 0x03) {
-        ESP_LOGW(TAG, "Invalid string descriptor (idx=%d)", str_idx);
-        usb_host_transfer_free(xfer);
-        return;
-    }
-
-    int bLength = desc[0];
-    if (bLength > actual_data) {
-        bLength = actual_data;
     }
 
     /* Convert UTF-16LE to ASCII: take low byte of each 16-bit code unit */
@@ -195,12 +138,10 @@ static void read_string_descriptor(usb_device_handle_t dev_hdl, uint8_t str_idx,
         chars = (int)(out_len - 1);
     }
     for (int i = 0; i < chars; i++) {
-        out[i] = (char)desc[2 + i * 2];
+        uint16_t wchar = str_desc->wData[i];
+        out[i] = (wchar < 0x80) ? (char)wchar : '?';
     }
     out[chars] = '\0';
-
-    ESP_LOGI(TAG, "String descriptor idx=%d: \"%s\"", str_idx, out);
-    usb_host_transfer_free(xfer);
 }
 
 /* ---- Device enumeration on NEW_DEV ---- */
@@ -247,14 +188,20 @@ static void handle_new_device(uint8_t dev_addr)
     ESP_LOGI(TAG, "New device: addr=%d, VID=0x%04x, PID=0x%04x, speed=%d",
              dev_addr, dev_desc->idVendor, dev_desc->idProduct, dev_info.speed);
 
-    /* NOTE: String descriptors CANNOT be read here because this runs inside
-     * the USB host client event callback (client_event_cb -> handle_new_device).
-     * Submitting control transfers from within the callback re-enters the USB
-     * host library and causes a crash. String descriptors will be read later
-     * in a deferred context after the device is fully registered. */
+    /* ESP-IDF v5.5+ caches string descriptors during enumeration.
+     * Read them directly from the device info -- no control transfer needed. */
     char str_manufacturer[64] = {0};
     char str_product[64] = {0};
     char str_serial[64] = {0};
+
+    copy_string_descriptor(dev_info.str_desc_manufacturer, str_manufacturer, sizeof(str_manufacturer));
+    copy_string_descriptor(dev_info.str_desc_product, str_product, sizeof(str_product));
+    copy_string_descriptor(dev_info.str_desc_serial_num, str_serial, sizeof(str_serial));
+
+    if (str_manufacturer[0] || str_product[0] || str_serial[0]) {
+        ESP_LOGI(TAG, "  Strings: mfr='%s' prod='%s' ser='%s'",
+                 str_manufacturer, str_product, str_serial);
+    }
 
     /* 5. Track the device handle internally */
     if (tracked_add(dev_addr, dev_hdl) < 0) {
@@ -263,12 +210,37 @@ static void handle_new_device(uint8_t dev_addr)
         return;
     }
 
-    /* 6. Build busid as "1-{dev_addr}" and populate dm_device_info_t */
+    /* 6. Build busid path and populate dm_device_info_t.
+     *    If the device has a parent (behind a hub), the path encodes topology:
+     *    "1-{port}" for root-port devices, "1-{parent_port}.{port}" for hub children.
+     *    When parent info isn't actionable, fall back to "1-{dev_addr}". */
     dm_device_info_t dm_info = {0};
     dm_info.bus_id = 1;
     dm_info.dev_addr = dev_addr;
     dm_info.speed = map_speed(dev_info.speed);
-    snprintf(dm_info.path, sizeof(dm_info.path), "1-%d", dev_addr);
+
+    if (dev_info.parent.dev_hdl != NULL && dev_info.parent.port_num != 0) {
+        /* Device is behind a hub.  Try to resolve the parent's address
+         * so we can build a proper topology path. */
+        usb_device_info_t parent_info;
+        esp_err_t perr = usb_host_device_info(dev_info.parent.dev_hdl, &parent_info);
+        if (perr == ESP_OK && parent_info.parent.dev_hdl == NULL) {
+            /* Parent is directly on the root port */
+            snprintf(dm_info.path, sizeof(dm_info.path), "1-%d.%d",
+                     parent_info.dev_addr, dev_info.parent.port_num);
+        } else if (perr == ESP_OK) {
+            /* Parent itself is behind another hub -- just use parent addr */
+            snprintf(dm_info.path, sizeof(dm_info.path), "1-%d.%d",
+                     parent_info.dev_addr, dev_info.parent.port_num);
+        } else {
+            /* Can't query parent, fall back */
+            snprintf(dm_info.path, sizeof(dm_info.path), "1-%d", dev_addr);
+        }
+        ESP_LOGI(TAG, "  Device is behind hub (parent port=%d), path=%s",
+                 dev_info.parent.port_num, dm_info.path);
+    } else {
+        snprintf(dm_info.path, sizeof(dm_info.path), "1-%d", dev_addr);
+    }
 
     /* Fill descriptor fields */
     dm_info.vendor_id          = dev_desc->idVendor;
@@ -337,6 +309,23 @@ static void handle_new_device(uint8_t dev_addr)
     webui_notify_device_change();
 }
 
+/* ---- Helper: find device_manager index by dev_addr ---- */
+
+typedef struct {
+    uint8_t addr;
+    int found_idx;
+} find_by_addr_ctx_t;
+
+static bool find_by_addr_cb(int index, const dm_device_info_t *info, void *user_data)
+{
+    find_by_addr_ctx_t *ctx = (find_by_addr_ctx_t *)user_data;
+    if (info->dev_addr == ctx->addr) {
+        ctx->found_idx = index;
+        return false;  /* stop iteration */
+    }
+    return true;
+}
+
 /* ---- Device disconnect on DEV_GONE ---- */
 
 static void handle_device_gone(usb_device_handle_t dev_hdl)
@@ -354,12 +343,13 @@ static void handle_device_gone(usb_device_handle_t dev_hdl)
     /* Notify transfer engine about removal before any cleanup */
     usb_host_mgr_notify_removal(dev_addr);
 
-    /* Remove from device_manager by busid */
-    char busid[32];
-    snprintf(busid, sizeof(busid), "1-%d", dev_addr);
-    int dm_idx;
-    if (device_manager_lookup(busid, &dm_idx) == ESP_OK) {
-        device_manager_remove(dm_idx);
+    /* Remove from device_manager by dev_addr.
+     * Path format may vary (e.g. "1-2" or "1-3.1" for hub devices),
+     * so we search by dev_addr rather than reconstructing the path. */
+    find_by_addr_ctx_t fctx = { .addr = dev_addr, .found_idx = -1 };
+    device_manager_foreach(find_by_addr_cb, &fctx);
+    if (fctx.found_idx >= 0) {
+        device_manager_remove(fctx.found_idx);
     }
 
     /* Close the USB device */
@@ -474,17 +464,7 @@ static void usb_class_driver_task(void *arg)
             ESP_LOGD(TAG, "client_handle_events: %s", esp_err_to_name(err));
         }
 
-        /*
-         * NOTE: String descriptor reading is disabled because ESP-IDF's USB host
-         * stack processes transfer completions inside usb_host_client_handle_events().
-         * Since this task is the one calling that function, submitting a synchronous
-         * control transfer here deadlocks: we block on a semaphore waiting for the
-         * completion callback, but the callback can only fire inside
-         * usb_host_client_handle_events() which we're not calling because we're blocked.
-         *
-         * String descriptors would require a separate dedicated task with its own
-         * USB host client registration. For now, devices are identified by VID:PID.
-         */
+        /* String descriptors are now read from ESP-IDF's cache in handle_new_device() */
     }
 
     ESP_LOGI(TAG, "Class driver task stopping");
