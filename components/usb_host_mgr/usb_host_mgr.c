@@ -601,8 +601,9 @@ esp_err_t usb_host_mgr_release_interfaces(uint8_t dev_addr)
 {
     usb_device_handle_t dev_hdl = usb_host_mgr_get_handle(dev_addr);
     if (!dev_hdl) {
-        ESP_LOGW(TAG, "release_interfaces: no handle for addr %d", dev_addr);
-        return ESP_ERR_NOT_FOUND;
+        /* Expected when device was physically disconnected - handle already closed */
+        ESP_LOGD(TAG, "release_interfaces: device addr %d already removed", dev_addr);
+        return ESP_OK;
     }
 
     const usb_config_desc_t *config_desc = NULL;
