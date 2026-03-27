@@ -240,6 +240,29 @@ esp_err_t device_manager_release(int index)
     return ESP_OK;
 }
 
+void device_manager_update_strings(int index, const char *manufacturer,
+                                    const char *product, const char *serial)
+{
+    if (!s_devmgr.initialized) return;
+    if (index < 0 || index >= CONFIG_USBIP_MAX_DEVICES) return;
+    if (!take_lock()) return;
+
+    dm_device_info_t *dev = &s_devmgr.devices[index];
+    if (dev->in_use) {
+        if (manufacturer && manufacturer[0]) {
+            strncpy(dev->manufacturer, manufacturer, sizeof(dev->manufacturer) - 1);
+        }
+        if (product && product[0]) {
+            strncpy(dev->product, product, sizeof(dev->product) - 1);
+        }
+        if (serial && serial[0]) {
+            strncpy(dev->serial, serial, sizeof(dev->serial) - 1);
+        }
+    }
+
+    give_lock();
+}
+
 int device_manager_get_count(void)
 {
     if (!s_devmgr.initialized) {

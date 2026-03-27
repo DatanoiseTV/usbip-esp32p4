@@ -32,6 +32,7 @@ static const char *TAG = "usb_host";
 
 typedef struct {
     bool in_use;
+    bool needs_strings;  /* Deferred: read string descriptors outside event callback */
     uint8_t dev_addr;
     usb_device_handle_t dev_hdl;
 } tracked_device_t;
@@ -65,9 +66,10 @@ static int tracked_add(uint8_t dev_addr, usb_device_handle_t dev_hdl)
 {
     for (int i = 0; i < MAX_TRACKED_DEVICES; i++) {
         if (!s_tracked[i].in_use) {
-            s_tracked[i].in_use   = true;
-            s_tracked[i].dev_addr = dev_addr;
-            s_tracked[i].dev_hdl  = dev_hdl;
+            s_tracked[i].in_use       = true;
+            s_tracked[i].needs_strings = true;
+            s_tracked[i].dev_addr     = dev_addr;
+            s_tracked[i].dev_hdl      = dev_hdl;
             return i;
         }
     }
@@ -245,13 +247,14 @@ static void handle_new_device(uint8_t dev_addr)
     ESP_LOGI(TAG, "New device: addr=%d, VID=0x%04x, PID=0x%04x, speed=%d",
              dev_addr, dev_desc->idVendor, dev_desc->idProduct, dev_info.speed);
 
-    /* 4b. Read string descriptors (manufacturer, product, serial) */
+    /* NOTE: String descriptors CANNOT be read here because this runs inside
+     * the USB host client event callback (client_event_cb -> handle_new_device).
+     * Submitting control transfers from within the callback re-enters the USB
+     * host library and causes a crash. String descriptors will be read later
+     * in a deferred context after the device is fully registered. */
     char str_manufacturer[64] = {0};
     char str_product[64] = {0};
     char str_serial[64] = {0};
-    read_string_descriptor(dev_hdl, dev_desc->iManufacturer, str_manufacturer, sizeof(str_manufacturer));
-    read_string_descriptor(dev_hdl, dev_desc->iProduct, str_product, sizeof(str_product));
-    read_string_descriptor(dev_hdl, dev_desc->iSerialNumber, str_serial, sizeof(str_serial));
 
     /* 5. Track the device handle internally */
     if (tracked_add(dev_addr, dev_hdl) < 0) {
@@ -469,6 +472,35 @@ static void usb_class_driver_task(void *arg)
         err = usb_host_client_handle_events(s_client_hdl, pdMS_TO_TICKS(100));
         if (err != ESP_OK && err != ESP_ERR_TIMEOUT) {
             ESP_LOGD(TAG, "client_handle_events: %s", esp_err_to_name(err));
+        }
+
+        /* Deferred: read string descriptors for newly added devices.
+         * This runs OUTSIDE the event callback, so it's safe to do
+         * synchronous control transfers here. */
+        for (int i = 0; i < MAX_TRACKED_DEVICES; i++) {
+            if (s_tracked[i].dev_hdl && s_tracked[i].needs_strings) {
+                s_tracked[i].needs_strings = false;
+                usb_device_handle_t dh = s_tracked[i].dev_hdl;
+                uint8_t addr = s_tracked[i].dev_addr;
+
+                const usb_device_desc_t *dd = NULL;
+                if (usb_host_get_device_descriptor(dh, &dd) == ESP_OK && dd) {
+                    char mfr[64] = {0}, prod[64] = {0}, ser[64] = {0};
+                    read_string_descriptor(dh, dd->iManufacturer, mfr, sizeof(mfr));
+                    read_string_descriptor(dh, dd->iProduct, prod, sizeof(prod));
+                    read_string_descriptor(dh, dd->iSerialNumber, ser, sizeof(ser));
+
+                    /* Update device_manager with the strings */
+                    int dm_idx = -1;
+                    char path[32];
+                    snprintf(path, sizeof(path), "1-%d", addr);
+                    if (device_manager_lookup(path, &dm_idx) == ESP_OK) {
+                        device_manager_update_strings(dm_idx, mfr, prod, ser);
+                        ESP_LOGI(TAG, "Device %s: mfr='%s' prod='%s' ser='%s'",
+                                 path, mfr, prod, ser);
+                    }
+                }
+            }
         }
     }
 

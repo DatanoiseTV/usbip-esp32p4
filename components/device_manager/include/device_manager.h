@@ -157,6 +157,12 @@ void device_manager_foreach(bool (*callback)(int index, const dm_device_info_t *
 void device_manager_update_stats(int index, uint32_t bytes_in_delta,
                                   uint32_t bytes_out_delta, bool success);
 
+/**
+ * @brief Update string descriptors for a device (deferred read)
+ */
+void device_manager_update_strings(int index, const char *manufacturer,
+                                    const char *product, const char *serial);
+
 #ifdef __cplusplus
 }
 #endif
