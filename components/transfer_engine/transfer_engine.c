@@ -191,7 +191,18 @@ static int send_error_reply(int fd, uint32_t seqnum, int32_t status)
  */
 static void cancel_pending_urb(pending_urb_t *slot, usb_device_handle_t dev_handle, bool force)
 {
-    if (force && !slot->is_control && dev_handle) {
+    if (!slot->is_control && dev_handle) {
+        if (!force) {
+            /* Gentle cancel: wait briefly for the transfer to complete naturally.
+             * This avoids halting the endpoint which could interfere with device protocol. */
+            if (xSemaphoreTake(slot->sem, pdMS_TO_TICKS(500)) == pdTRUE) {
+                return; /* Transfer completed naturally */
+            }
+            /* Transfer didn't complete in 500ms - MUST force-cancel to prevent
+             * use-after-free when we free the slot but the transfer is still in-flight. */
+            ESP_LOGW(TAG, "Gentle cancel failed for seqnum=%lu, forcing halt/flush/clear",
+                     (unsigned long)slot->seqnum);
+        }
         uint8_t ep_addr = slot->xfer->bEndpointAddress;
         usb_host_endpoint_halt(dev_handle, ep_addr);
         usb_host_endpoint_flush(dev_handle, ep_addr);
@@ -199,9 +210,9 @@ static void cancel_pending_urb(pending_urb_t *slot, usb_device_handle_t dev_hand
         xSemaphoreTake(slot->sem, pdMS_TO_TICKS(1000));
         usb_host_endpoint_clear(dev_handle, ep_addr);
     } else if (!slot->is_control) {
-        /* Gentle cancel: just wait briefly for the transfer to complete on its own.
-         * Don't halt the endpoint - the device may still be using it. */
-        xSemaphoreTake(slot->sem, pdMS_TO_TICKS(500));
+        /* No device handle (device already removed) - just wait for callback.
+         * The USB host stack should fire the callback with error status. */
+        xSemaphoreTake(slot->sem, pdMS_TO_TICKS(2000));
     } else {
         /* EP0 control: wait for USB stack's own timeout */
         xSemaphoreTake(slot->sem, pdMS_TO_TICKS(6000));
@@ -319,7 +330,7 @@ static int send_completed_reply(int fd, pending_urb_t *slot)
 
     /* Log every transfer at INFO level for debugging */
     if (reply_status == 0) {
-        ESP_LOGI(TAG, "URB seqnum=%lu ep=0x%02x %s len=%ld ok",
+        ESP_LOGD(TAG, "URB seqnum=%lu ep=0x%02x %s len=%ld ok",
                  (unsigned long)slot->seqnum,
                  (unsigned)(slot->ep | (slot->direction == USBIP_DIR_IN ? 0x80 : 0x00)),
                  slot->direction == USBIP_DIR_IN ? "IN" : "OUT",
@@ -359,7 +370,7 @@ static int handle_cmd_submit(int fd, usbip_header_t *hdr, const dm_device_info_t
         num_iso = 0;
     }
 
-    ESP_LOGI(TAG, "CMD_SUBMIT seq=%lu ep=%lu dir=%s buflen=%ld flags=0x%08lx",
+    ESP_LOGD(TAG, "CMD_SUBMIT seq=%lu ep=%lu dir=%s buflen=%ld flags=0x%08lx",
              (unsigned long)seqnum, (unsigned long)ep,
              direction == USBIP_DIR_IN ? "IN" : "OUT",
              (long)buflen, (unsigned long)hdr->u.cmd_submit.transfer_flags);
