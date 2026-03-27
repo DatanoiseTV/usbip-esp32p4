@@ -21,6 +21,8 @@
 #include "freertos/semphr.h"
 #include "usb/usb_host.h"
 
+#include "esp_heap_caps.h"
+
 #include <string.h>
 
 static const char *TAG = "usb_host";
@@ -99,6 +101,106 @@ static void tracked_remove(int idx)
     }
 }
 
+/* ---- String descriptor helper ---- */
+
+static void xfer_done_cb(usb_transfer_t *transfer)
+{
+    SemaphoreHandle_t sem = (SemaphoreHandle_t)transfer->context;
+    xSemaphoreGive(sem);
+}
+
+/**
+ * Read a USB string descriptor and convert UTF-16LE to ASCII.
+ * @param dev_hdl   Opened device handle
+ * @param str_idx   String descriptor index (0 = skip)
+ * @param out       Output buffer
+ * @param out_len   Size of output buffer
+ */
+static void read_string_descriptor(usb_device_handle_t dev_hdl, uint8_t str_idx,
+                                   char *out, size_t out_len)
+{
+    if (str_idx == 0 || out_len == 0) {
+        return;
+    }
+
+    usb_transfer_t *xfer = NULL;
+    esp_err_t err = usb_host_transfer_alloc(64 + sizeof(usb_setup_packet_t), 0, &xfer);
+    if (err != ESP_OK || !xfer) {
+        ESP_LOGW(TAG, "Failed to alloc transfer for string desc: %s", esp_err_to_name(err));
+        return;
+    }
+
+    SemaphoreHandle_t sem = xSemaphoreCreateBinary();
+    if (!sem) {
+        usb_host_transfer_free(xfer);
+        return;
+    }
+
+    /* Fill setup packet using ESP-IDF macro */
+    usb_setup_packet_t *setup = (usb_setup_packet_t *)xfer->data_buffer;
+    USB_SETUP_PACKET_INIT_GET_STR_DESC(setup, str_idx, 0x0409, 64);
+
+    xfer->num_bytes = sizeof(usb_setup_packet_t) + 64;
+    xfer->device_handle = dev_hdl;
+    xfer->bEndpointAddress = 0x00;
+    xfer->callback = xfer_done_cb;
+    xfer->context = sem;
+    xfer->timeout_ms = 1000;
+
+    err = usb_host_transfer_submit_control(s_client_hdl, xfer);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "Failed to submit string desc request (idx=%d): %s", str_idx, esp_err_to_name(err));
+        vSemaphoreDelete(sem);
+        usb_host_transfer_free(xfer);
+        return;
+    }
+
+    /* Wait for completion */
+    if (xSemaphoreTake(sem, pdMS_TO_TICKS(2000)) != pdTRUE) {
+        ESP_LOGW(TAG, "Timeout reading string descriptor idx=%d", str_idx);
+        vSemaphoreDelete(sem);
+        usb_host_transfer_free(xfer);
+        return;
+    }
+
+    vSemaphoreDelete(sem);
+
+    if (xfer->status != USB_TRANSFER_STATUS_COMPLETED) {
+        ESP_LOGW(TAG, "String descriptor transfer failed (idx=%d), status=%d", str_idx, xfer->status);
+        usb_host_transfer_free(xfer);
+        return;
+    }
+
+    /* Parse: data starts after 8-byte setup packet
+     * Byte 0 = bLength, Byte 1 = bDescriptorType (0x03), Bytes 2+ = UTF-16LE */
+    uint8_t *desc = xfer->data_buffer + sizeof(usb_setup_packet_t);
+    int actual_data = xfer->actual_num_bytes - sizeof(usb_setup_packet_t);
+    if (actual_data < 2 || desc[1] != 0x03) {
+        ESP_LOGW(TAG, "Invalid string descriptor (idx=%d)", str_idx);
+        usb_host_transfer_free(xfer);
+        return;
+    }
+
+    int bLength = desc[0];
+    if (bLength > actual_data) {
+        bLength = actual_data;
+    }
+
+    /* Convert UTF-16LE to ASCII: take low byte of each 16-bit code unit */
+    int str_bytes = bLength - 2;  /* exclude bLength and bDescriptorType */
+    int chars = str_bytes / 2;
+    if (chars > (int)(out_len - 1)) {
+        chars = (int)(out_len - 1);
+    }
+    for (int i = 0; i < chars; i++) {
+        out[i] = (char)desc[2 + i * 2];
+    }
+    out[chars] = '\0';
+
+    ESP_LOGI(TAG, "String descriptor idx=%d: \"%s\"", str_idx, out);
+    usb_host_transfer_free(xfer);
+}
+
 /* ---- Device enumeration on NEW_DEV ---- */
 
 static void handle_new_device(uint8_t dev_addr)
@@ -143,6 +245,14 @@ static void handle_new_device(uint8_t dev_addr)
     ESP_LOGI(TAG, "New device: addr=%d, VID=0x%04x, PID=0x%04x, speed=%d",
              dev_addr, dev_desc->idVendor, dev_desc->idProduct, dev_info.speed);
 
+    /* 4b. Read string descriptors (manufacturer, product, serial) */
+    char str_manufacturer[64] = {0};
+    char str_product[64] = {0};
+    char str_serial[64] = {0};
+    read_string_descriptor(dev_hdl, dev_desc->iManufacturer, str_manufacturer, sizeof(str_manufacturer));
+    read_string_descriptor(dev_hdl, dev_desc->iProduct, str_product, sizeof(str_product));
+    read_string_descriptor(dev_hdl, dev_desc->iSerialNumber, str_serial, sizeof(str_serial));
+
     /* 5. Track the device handle internally */
     if (tracked_add(dev_addr, dev_hdl) < 0) {
         ESP_LOGE(TAG, "No tracking slot for device addr %d", dev_addr);
@@ -165,6 +275,22 @@ static void handle_new_device(uint8_t dev_addr)
     dm_info.dev_subclass       = dev_desc->bDeviceSubClass;
     dm_info.dev_protocol       = dev_desc->bDeviceProtocol;
     dm_info.num_configurations = dev_desc->bNumConfigurations;
+
+    /* Copy string descriptors */
+    strncpy(dm_info.manufacturer, str_manufacturer, sizeof(dm_info.manufacturer) - 1);
+    strncpy(dm_info.product, str_product, sizeof(dm_info.product) - 1);
+    strncpy(dm_info.serial, str_serial, sizeof(dm_info.serial) - 1);
+
+    /* Allocate PSRAM and copy raw config descriptor */
+    if (config_desc) {
+        dm_info.config_desc_raw = heap_caps_malloc(config_desc->wTotalLength, MALLOC_CAP_SPIRAM);
+        if (dm_info.config_desc_raw) {
+            memcpy(dm_info.config_desc_raw, config_desc, config_desc->wTotalLength);
+            dm_info.config_desc_len = config_desc->wTotalLength;
+        } else {
+            ESP_LOGW(TAG, "Failed to allocate PSRAM for config descriptor");
+        }
+    }
 
     /* 7. Populate interface descriptors from config descriptor */
     if (config_desc) {
@@ -527,4 +653,10 @@ uint8_t usb_host_mgr_check_removal(void)
         s_removed_addr = 0;
     }
     return addr;
+}
+
+esp_err_t usb_host_mgr_reset_device(uint8_t dev_addr)
+{
+    ESP_LOGW(TAG, "Device reset not supported in current ESP-IDF version (addr=%d)", dev_addr);
+    return ESP_ERR_NOT_SUPPORTED;
 }

@@ -76,6 +76,17 @@ void usb_host_mgr_notify_removal(uint8_t dev_addr);
  */
 uint8_t usb_host_mgr_check_removal(void);
 
+/**
+ * @brief Reset a USB device
+ *
+ * Currently returns ESP_ERR_NOT_SUPPORTED as the underlying
+ * usb_host_device_reset() API is not available in ESP-IDF v5.5.
+ *
+ * @param dev_addr USB device address
+ * @return ESP_OK on success, or ESP_ERR_NOT_SUPPORTED
+ */
+esp_err_t usb_host_mgr_reset_device(uint8_t dev_addr);
+
 #ifdef __cplusplus
 }
 #endif
