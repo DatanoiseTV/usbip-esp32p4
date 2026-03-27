@@ -211,9 +211,14 @@ static int handle_import(int fd, uint16_t client_version, uint32_t client_ip)
         return -1;
     }
 
-    /* Send the device descriptor */
+    /* Send the device descriptor.
+     * Per usbip-win2: busid in reply MUST exactly match the request busid
+     * (strncmp validation on client side). */
     usbip_usb_device_t udev;
     fill_usb_device(&udev, &info);
+    /* Overwrite busid to guarantee exact match with request */
+    memset(udev.busid, 0, sizeof(udev.busid));
+    strncpy(udev.busid, req.busid, sizeof(udev.busid) - 1);
     usbip_pack_usb_device(&udev, true);
 
     if (usbip_net_send(fd, &udev, sizeof(udev)) < 0) {
