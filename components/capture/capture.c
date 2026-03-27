@@ -24,6 +24,7 @@
 
 #include <string.h>
 #include <stdio.h>
+#include <errno.h>
 #include <dirent.h>
 #include <sys/stat.h>
 
@@ -244,7 +245,7 @@ static esp_err_t sd_mount(void)
     slot.flags |= SDMMC_SLOT_FLAG_INTERNAL_PULLUP;
 
     esp_vfs_fat_sdmmc_mount_config_t mount_cfg = {
-        .format_if_mount_failed = false,
+        .format_if_mount_failed = true,
         .max_files = 2,
         .allocation_unit_size = 16 * 1024,
     };
@@ -490,9 +491,10 @@ esp_err_t capture_start(void)
     s_file_counter = (s_file_counter + 1) % 10000;
 
     /* Open file and write PCAP global header */
+    ESP_LOGI(TAG, "Creating capture file: %s", s_filepath);
     s_pcap_file = fopen(s_filepath, "wb");
     if (!s_pcap_file) {
-        ESP_LOGE(TAG, "Failed to open %s for writing", s_filepath);
+        ESP_LOGE(TAG, "Failed to open %s for writing (errno=%d)", s_filepath, errno);
         return ESP_FAIL;
     }
 
