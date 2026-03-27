@@ -85,15 +85,56 @@ static int build_devices_json(char *buf, int buflen)
         if (printed > 0) {
             pos += snprintf(buf + pos, buflen - pos, ",");
         }
+
+        /* Escape manufacturer and product strings for JSON safety */
+        char mfr_esc[128];
+        char prod_esc[128];
+        int ep;
+
+        ep = 0;
+        for (int j = 0; info.manufacturer[j] && ep < (int)sizeof(mfr_esc) - 2; j++) {
+            char c = info.manufacturer[j];
+            if (c == '"' || c == '\\') mfr_esc[ep++] = '\\';
+            mfr_esc[ep++] = c;
+        }
+        mfr_esc[ep] = '\0';
+
+        ep = 0;
+        for (int j = 0; info.product[j] && ep < (int)sizeof(prod_esc) - 2; j++) {
+            char c = info.product[j];
+            if (c == '"' || c == '\\') prod_esc[ep++] = '\\';
+            prod_esc[ep++] = c;
+        }
+        prod_esc[ep] = '\0';
+
         pos += snprintf(buf + pos, buflen - pos,
-            "{\"path\":\"%s\",\"vid\":%u,\"pid\":%u,\"speed\":%d,"
-            "\"state\":%d,\"client_ip\":%lu}",
+            "{\"idx\":%d,\"path\":\"%s\",\"vid\":%u,\"pid\":%u,\"speed\":%d,"
+            "\"state\":%d,\"client_ip\":%lu,"
+            "\"mfr\":\"%s\",\"prod\":\"%s\","
+            "\"bi\":%llu,\"bo\":%llu,\"uok\":%lu,\"ufl\":%lu,"
+            "\"det\":%s,\"icl\":[",
+            i,
             info.path,
             (unsigned)info.vendor_id,
             (unsigned)info.product_id,
             (int)info.speed,
             (int)info.state,
-            (unsigned long)info.client_ip);
+            (unsigned long)info.client_ip,
+            mfr_esc, prod_esc,
+            (unsigned long long)info.bytes_in,
+            (unsigned long long)info.bytes_out,
+            (unsigned long)info.urbs_completed,
+            (unsigned long)info.urbs_failed,
+            info.config_desc_len > 0 ? "true" : "false");
+
+        /* Interface class array */
+        for (int k = 0; k < info.num_interfaces && k < DEVICE_MANAGER_MAX_INTERFACES; k++) {
+            if (k > 0) pos += snprintf(buf + pos, buflen - pos, ",");
+            pos += snprintf(buf + pos, buflen - pos, "%u",
+                (unsigned)info.interfaces[k].bInterfaceClass);
+        }
+
+        pos += snprintf(buf + pos, buflen - pos, "]}");
         printed++;
     }
 
@@ -165,22 +206,23 @@ void ws_broadcast_stats(void)
     if (!has_clients) return;
 
     /* Build the stats JSON message on the stack */
-    char *json_buf = malloc(4096);
+    char *json_buf = malloc(8192);
     if (!json_buf) {
         ESP_LOGW(TAG, "ws_broadcast_stats: OOM");
         return;
     }
     int pos = 0;
-    int buflen = 4096;
+    int buflen = 8192;
 
     uint32_t free_heap = esp_get_free_heap_size();
+    uint32_t free_internal = esp_get_free_internal_heap_size();
     int64_t uptime_us = esp_timer_get_time();
     int uptime_sec = (int)(uptime_us / 1000000);
 
     pos += snprintf(json_buf + pos, buflen - pos,
-        "{\"type\":\"stats\",\"free_heap\":%lu,\"uptime_sec\":%d,"
+        "{\"type\":\"stats\",\"free_heap\":%lu,\"free_internal\":%lu,\"uptime_sec\":%d,"
         "\"bw_in\":0,\"bw_out\":0,\"devices\":",
-        (unsigned long)free_heap, uptime_sec);
+        (unsigned long)free_heap, (unsigned long)free_internal, uptime_sec);
 
     pos += build_devices_json(json_buf + pos, buflen - pos);
 
