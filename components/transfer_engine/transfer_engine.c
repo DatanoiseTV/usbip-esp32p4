@@ -182,20 +182,28 @@ static int send_error_reply(int fd, uint32_t seqnum, int32_t status)
 }
 
 /**
- * @brief Abort a pending URB slot: halt/flush/clear the endpoint.
+ * @brief Cancel a pending URB slot.
+ * @param slot       The pending URB slot
+ * @param dev_handle USB device handle (may be NULL if device removed)
+ * @param force      If true, halt/flush/clear the endpoint (for timeouts/cleanup).
+ *                   If false, just wait for the transfer to complete on its own
+ *                   (for CMD_UNLINK - avoids changing endpoint state on device).
  */
-static void abort_pending_urb(pending_urb_t *slot, usb_device_handle_t dev_handle)
+static void cancel_pending_urb(pending_urb_t *slot, usb_device_handle_t dev_handle, bool force)
 {
-    if (!slot->is_control && dev_handle) {
+    if (force && !slot->is_control && dev_handle) {
         uint8_t ep_addr = slot->xfer->bEndpointAddress;
         usb_host_endpoint_halt(dev_handle, ep_addr);
         usb_host_endpoint_flush(dev_handle, ep_addr);
         /* Wait for the canceled callback */
         xSemaphoreTake(slot->sem, pdMS_TO_TICKS(1000));
         usb_host_endpoint_clear(dev_handle, ep_addr);
+    } else if (!slot->is_control) {
+        /* Gentle cancel: just wait briefly for the transfer to complete on its own.
+         * Don't halt the endpoint - the device may still be using it. */
+        xSemaphoreTake(slot->sem, pdMS_TO_TICKS(500));
     } else {
-        /* For EP0 control: wait for USB stack's own timeout */
-        ESP_LOGW(TAG, "EP0 timeout - waiting for USB stack timeout");
+        /* EP0 control: wait for USB stack's own timeout */
         xSemaphoreTake(slot->sem, pdMS_TO_TICKS(6000));
     }
 }
@@ -552,7 +560,7 @@ static int handle_cmd_unlink(int fd, usbip_header_t *hdr, const dm_device_info_t
                  (unsigned long)unlink_seqnum,
                  (unsigned)(slot->ep | (slot->direction == USBIP_DIR_IN ? 0x80 : 0x00)));
 
-        abort_pending_urb(slot, dev_handle);
+        cancel_pending_urb(slot, dev_handle, false);
         /* Do NOT send RET_SUBMIT - spec says no RET_SUBMIT after successful UNLINK */
         free_pending_slot(slot);
     }
@@ -726,7 +734,7 @@ int transfer_engine_run(int sockfd, const char *busid)
                 ESP_LOGE(TAG, "Transfer timeout (seqnum=%lu), aborting ep=0x%02x",
                          (unsigned long)slot->seqnum, slot->xfer->bEndpointAddress);
 
-                abort_pending_urb(slot, cached_dev_handle);
+                cancel_pending_urb(slot, cached_dev_handle, true);
 
                 /* Send timeout reply */
                 send_error_reply(sockfd, slot->seqnum, -LINUX_ETIMEDOUT);
@@ -765,7 +773,7 @@ cleanup:
             ESP_LOGW(TAG, "Cleanup: aborting pending URB seqnum=%lu",
                      (unsigned long)slot->seqnum);
 
-            abort_pending_urb(slot, cleanup_handle);
+            cancel_pending_urb(slot, cleanup_handle, true);
 
             /* Send -ENODEV for each pending URB so client knows device is gone */
             send_error_reply(sockfd, slot->seqnum, -LINUX_ENODEV);
