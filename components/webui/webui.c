@@ -11,12 +11,109 @@
 #include "event_log.h"
 #include "access_control.h"
 #include "network_mgr.h"
+#include "mbedtls/sha256.h"
+#include "nvs_flash.h"
+#include "nvs.h"
+#include "mbedtls/base64.h"
 
 #include <string.h>
 #include <stdio.h>
 #include <unistd.h>
 
 static const char *TAG = "webui";
+
+/* ---- Authentication ---- */
+
+#define AUTH_NVS_NAMESPACE "auth"
+#define AUTH_MAX_USERNAME 32
+
+static bool s_auth_enabled = false;
+static char s_auth_username[AUTH_MAX_USERNAME] = "";
+static uint8_t s_auth_password_hash[32] = {0};
+
+static void auth_load_from_nvs(void)
+{
+    nvs_handle_t nvs;
+    if (nvs_open(AUTH_NVS_NAMESPACE, NVS_READONLY, &nvs) != ESP_OK) return;
+    uint8_t en = 0;
+    nvs_get_u8(nvs, "enabled", &en);
+    s_auth_enabled = (en != 0);
+    size_t len = sizeof(s_auth_username);
+    nvs_get_str(nvs, "username", s_auth_username, &len);
+    len = sizeof(s_auth_password_hash);
+    nvs_get_blob(nvs, "pw_hash", s_auth_password_hash, &len);
+    nvs_close(nvs);
+}
+
+void webui_auth_save(bool enabled, const char *username, const char *password)
+{
+    s_auth_enabled = enabled;
+    if (username) strncpy(s_auth_username, username, AUTH_MAX_USERNAME - 1);
+    if (password) {
+        mbedtls_sha256((const uint8_t *)password, strlen(password), s_auth_password_hash, 0);
+    }
+    nvs_handle_t nvs;
+    if (nvs_open(AUTH_NVS_NAMESPACE, NVS_READWRITE, &nvs) != ESP_OK) return;
+    nvs_set_u8(nvs, "enabled", enabled ? 1 : 0);
+    nvs_set_str(nvs, "username", s_auth_username);
+    nvs_set_blob(nvs, "pw_hash", s_auth_password_hash, 32);
+    nvs_commit(nvs);
+    nvs_close(nvs);
+}
+
+bool webui_auth_enabled(void)
+{
+    return s_auth_enabled;
+}
+
+const char *webui_auth_username(void)
+{
+    return s_auth_username;
+}
+
+static bool auth_check_request(httpd_req_t *req)
+{
+    if (!s_auth_enabled) return true;
+
+    char auth_buf[256];
+    if (httpd_req_get_hdr_value_str(req, "Authorization", auth_buf, sizeof(auth_buf)) != ESP_OK) {
+        return false;
+    }
+    /* Expect "Basic base64encoded" */
+    if (strncmp(auth_buf, "Basic ", 6) != 0) return false;
+
+    /* Decode base64 */
+    unsigned char decoded[128];
+    size_t decoded_len = 0;
+    if (mbedtls_base64_decode(decoded, sizeof(decoded) - 1, &decoded_len,
+                               (const unsigned char *)(auth_buf + 6), strlen(auth_buf + 6)) != 0) {
+        return false;
+    }
+    decoded[decoded_len] = '\0';
+
+    /* Split on ':' */
+    char *colon = strchr((char *)decoded, ':');
+    if (!colon) return false;
+    *colon = '\0';
+    const char *user = (char *)decoded;
+    const char *pass = colon + 1;
+
+    /* Check username */
+    if (strcmp(user, s_auth_username) != 0) return false;
+
+    /* Check password hash */
+    uint8_t hash[32];
+    mbedtls_sha256((const uint8_t *)pass, strlen(pass), hash, 0);
+    return memcmp(hash, s_auth_password_hash, 32) == 0;
+}
+
+static esp_err_t auth_reject(httpd_req_t *req)
+{
+    httpd_resp_set_status(req, "401 Unauthorized");
+    httpd_resp_set_hdr(req, "WWW-Authenticate", "Basic realm=\"USB/IP Server\"");
+    httpd_resp_send(req, "Unauthorized", HTTPD_RESP_USE_STRLEN);
+    return ESP_OK;
+}
 
 /* External symbols for embedded frontend files */
 extern const uint8_t index_html_start[] asm("_binary_index_html_start");
@@ -41,6 +138,7 @@ static esp_timer_handle_t s_stats_timer = NULL;
 
 static esp_err_t handle_index(httpd_req_t *req)
 {
+    if (!auth_check_request(req)) return auth_reject(req);
     httpd_resp_set_type(req, "text/html");
     httpd_resp_send(req, (const char *)index_html_start,
                     index_html_end - index_html_start);
@@ -49,6 +147,7 @@ static esp_err_t handle_index(httpd_req_t *req)
 
 static esp_err_t handle_settings(httpd_req_t *req)
 {
+    if (!auth_check_request(req)) return auth_reject(req);
     httpd_resp_set_type(req, "text/html");
     httpd_resp_send(req, (const char *)settings_html_start,
                     settings_html_end - settings_html_start);
@@ -57,6 +156,7 @@ static esp_err_t handle_settings(httpd_req_t *req)
 
 static esp_err_t handle_style_css(httpd_req_t *req)
 {
+    if (!auth_check_request(req)) return auth_reject(req);
     httpd_resp_set_type(req, "text/css");
     httpd_resp_send(req, (const char *)style_css_start,
                     style_css_end - style_css_start);
@@ -65,6 +165,7 @@ static esp_err_t handle_style_css(httpd_req_t *req)
 
 static esp_err_t handle_htmx_js(httpd_req_t *req)
 {
+    if (!auth_check_request(req)) return auth_reject(req);
     httpd_resp_set_type(req, "application/javascript");
     httpd_resp_send(req, (const char *)htmx_min_js_start,
                     htmx_min_js_end - htmx_min_js_start);
@@ -75,6 +176,7 @@ static esp_err_t handle_htmx_js(httpd_req_t *req)
 
 static esp_err_t handle_api_devices(httpd_req_t *req)
 {
+    if (!auth_check_request(req)) return auth_reject(req);
     httpd_resp_set_type(req, "application/json");
 
     /* Build JSON array of devices */
@@ -112,6 +214,7 @@ static esp_err_t handle_api_devices(httpd_req_t *req)
 
 static esp_err_t handle_api_stats(httpd_req_t *req)
 {
+    if (!auth_check_request(req)) return auth_reject(req);
     httpd_resp_set_type(req, "application/json");
 
     char json_buf[256];
@@ -135,6 +238,7 @@ static esp_err_t handle_api_stats(httpd_req_t *req)
 
 static esp_err_t handle_api_logs(httpd_req_t *req)
 {
+    if (!auth_check_request(req)) return auth_reject(req);
     httpd_resp_set_type(req, "application/json");
 
     char json_buf[4096];
@@ -174,6 +278,7 @@ static esp_err_t handle_api_logs(httpd_req_t *req)
 
 static esp_err_t handle_api_restart(httpd_req_t *req)
 {
+    if (!auth_check_request(req)) return auth_reject(req);
     httpd_resp_set_type(req, "application/json");
     httpd_resp_send(req, "{\"status\":\"restarting\"}", -1);
 
@@ -188,6 +293,7 @@ static esp_err_t handle_api_restart(httpd_req_t *req)
 
 static esp_err_t handle_ws(httpd_req_t *req)
 {
+    if (!auth_check_request(req)) return auth_reject(req);
     return ws_handler(req);
 }
 
@@ -210,6 +316,8 @@ static void stats_timer_cb(void *arg)
 
 esp_err_t webui_init(void)
 {
+    auth_load_from_nvs();
+
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.server_port = 80;
     config.core_id = 1;
