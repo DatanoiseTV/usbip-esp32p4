@@ -37,10 +37,15 @@ static const char *TAG = "xfer_eng";
 #define MIN_TRANSFER_SIZE   64
 
 /* USB transfer timeout set on the transfer object (ms) */
-#define USB_XFER_TIMEOUT_MS 30000
+/* USB transfer timeout - must be long enough for slow operations like
+ * chip erase on IC programmers which can take 60+ seconds */
+#define USB_XFER_TIMEOUT_MS 0  /* 0 = no timeout (wait indefinitely for USB completion) */
 
 /* Pending URB timeout (microseconds) - 30 seconds */
-#define PENDING_URB_TIMEOUT_US  (30 * 1000 * 1000LL)
+/* Pending URB timeout - how long before we force-abort a stuck transfer.
+ * Set high to accommodate slow devices (IC programmer chip erase = 60+ seconds).
+ * The client's own timeout (CMD_UNLINK) handles normal cancellation. */
+#define PENDING_URB_TIMEOUT_US  (120 * 1000 * 1000LL)
 
 /* select() timeout for polling the socket (microseconds) */
 #define SELECT_TIMEOUT_US   1000
