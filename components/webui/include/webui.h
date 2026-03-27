@@ -5,6 +5,7 @@
 #pragma once
 
 #include "esp_err.h"
+#include "esp_http_server.h"
 #include <stdbool.h>
 
 #ifdef __cplusplus
@@ -47,6 +48,26 @@ bool webui_auth_enabled(void);
  * @brief Get the current auth username
  */
 const char *webui_auth_username(void);
+
+/**
+ * @brief Register REST API endpoint handlers
+ * @param server HTTP server handle
+ */
+void webui_api_register(httpd_handle_t server);
+
+/**
+ * @brief Check if a request passes authentication
+ * @param req HTTP request
+ * @return true if authenticated (or auth disabled)
+ */
+bool webui_check_auth(httpd_req_t *req);
+
+/**
+ * @brief Send a 401 Unauthorized response
+ * @param req HTTP request
+ * @return ESP_OK
+ */
+esp_err_t webui_reject_auth(httpd_req_t *req);
 
 #ifdef __cplusplus
 }

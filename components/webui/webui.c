@@ -115,6 +115,17 @@ static esp_err_t auth_reject(httpd_req_t *req)
     return ESP_OK;
 }
 
+/* Public auth wrappers for use by webui_api.c */
+bool webui_check_auth(httpd_req_t *req)
+{
+    return auth_check_request(req);
+}
+
+esp_err_t webui_reject_auth(httpd_req_t *req)
+{
+    return auth_reject(req);
+}
+
 /* External symbols for embedded frontend files */
 extern const uint8_t index_html_start[] asm("_binary_index_html_start");
 extern const uint8_t index_html_end[]   asm("_binary_index_html_end");
@@ -323,7 +334,7 @@ esp_err_t webui_init(void)
     config.core_id = 1;
     config.task_priority = 5;
     config.stack_size = 8192;
-    config.max_uri_handlers = 12;
+    config.max_uri_handlers = 26;
     config.max_open_sockets = 4;
     config.close_fn = on_sock_close;
 
@@ -395,6 +406,9 @@ esp_err_t webui_init(void)
         .is_websocket = true,
     };
     httpd_register_uri_handler(s_server, &uri_ws);
+
+    /* Register REST API endpoints */
+    webui_api_register(s_server);
 
     /* Create stats broadcast timer (500ms interval) */
     const esp_timer_create_args_t timer_args = {
