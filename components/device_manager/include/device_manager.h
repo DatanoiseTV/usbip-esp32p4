@@ -58,6 +58,22 @@ typedef struct {
     uint32_t client_ip;          /**< IP of importing client (if exported) */
     char     path[32];           /**< Bus ID string e.g. "1-1" */
     dm_interface_info_t interfaces[DEVICE_MANAGER_MAX_INTERFACES]; /**< Interface descriptors */
+
+    /* String descriptors (UTF-8, null-terminated) */
+    char     manufacturer[64];
+    char     product[64];
+    char     serial[64];
+
+    /* Raw config descriptor (for endpoint/interface detail parsing by WebUI) */
+    uint8_t *config_desc_raw;        /**< Pointer to raw config descriptor (PSRAM allocated) */
+    uint16_t config_desc_len;        /**< Length of raw config descriptor */
+
+    /* Transfer statistics */
+    uint64_t bytes_in;
+    uint64_t bytes_out;
+    uint32_t urbs_completed;
+    uint32_t urbs_failed;
+    int64_t  last_activity_us;
 } dm_device_info_t;
 
 /**
@@ -130,6 +146,16 @@ int device_manager_get_count(void);
  * @param user_data Opaque pointer passed to callback
  */
 void device_manager_foreach(bool (*callback)(int index, const dm_device_info_t *info, void *user_data), void *user_data);
+
+/**
+ * @brief Update transfer statistics for a device
+ * @param index Device index
+ * @param bytes_in_delta Bytes received in this transfer (0 if OUT)
+ * @param bytes_out_delta Bytes sent in this transfer (0 if IN)
+ * @param success true if transfer succeeded
+ */
+void device_manager_update_stats(int index, uint32_t bytes_in_delta,
+                                  uint32_t bytes_out_delta, bool success);
 
 #ifdef __cplusplus
 }

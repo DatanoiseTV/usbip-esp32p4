@@ -6,9 +6,11 @@
 #include "device_manager.h"
 #include "event_log.h"
 #include "esp_log.h"
+#include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #include <string.h>
+#include <stdlib.h>
 
 static const char *TAG = "dev_mgr";
 
@@ -111,6 +113,11 @@ esp_err_t device_manager_remove(int index)
     ESP_LOGI(TAG, "Removing device [%d]: VID=%04x PID=%04x path=%s",
              index, dev->vendor_id, dev->product_id, dev->path);
     event_log_add(EVENT_LOG_LEVEL_INFO, "USB device removed: path=%s", dev->path);
+
+    if (dev->config_desc_raw) {
+        free(dev->config_desc_raw);
+        dev->config_desc_raw = NULL;
+    }
 
     memset(dev, 0, sizeof(dm_device_info_t));
 
@@ -289,6 +296,28 @@ void device_manager_foreach(bool (*callback)(int index, const dm_device_info_t *
                 break;
             }
         }
+    }
+
+    give_lock();
+}
+
+void device_manager_update_stats(int index, uint32_t bytes_in_delta,
+                                  uint32_t bytes_out_delta, bool success)
+{
+    if (!s_devmgr.initialized) return;
+    if (index < 0 || index >= CONFIG_USBIP_MAX_DEVICES) return;
+    if (!take_lock()) return;
+
+    dm_device_info_t *dev = &s_devmgr.devices[index];
+    if (dev->in_use) {
+        dev->bytes_in += bytes_in_delta;
+        dev->bytes_out += bytes_out_delta;
+        if (success) {
+            dev->urbs_completed++;
+        } else {
+            dev->urbs_failed++;
+        }
+        dev->last_activity_us = esp_timer_get_time();
     }
 
     give_lock();
