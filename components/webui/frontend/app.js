@@ -1263,6 +1263,122 @@
     }
 
     /* ================================================================
+     * Packet Capture
+     * ================================================================ */
+
+    var capState = { capturing: false, card_present: false };
+    var capPollTimer = null;
+
+    function formatFileSize(bytes) {
+        if (bytes >= 1048576) return (bytes / 1048576).toFixed(1) + ' MB';
+        if (bytes >= 1024) return (bytes / 1024).toFixed(1) + ' KB';
+        return bytes + ' B';
+    }
+
+    function pollCaptureStatus() {
+        fetch('/api/capture/status')
+            .then(function(r) { return r.json(); })
+            .then(function(data) {
+                capState = data;
+                var $card = document.getElementById('cap-card');
+                var $status = document.getElementById('cap-status');
+                var $filename = document.getElementById('cap-filename');
+                var $size = document.getElementById('cap-size');
+                var $packets = document.getElementById('cap-packets');
+                var $dropped = document.getElementById('cap-dropped');
+                var $toggle = document.getElementById('cap-toggle');
+                var $download = document.getElementById('cap-download');
+                var $delete = document.getElementById('cap-delete');
+
+                if ($card) {
+                    $card.textContent = data.card_present ? 'Present' : 'Not Found';
+                    $card.style.color = data.card_present ? '#4caf50' : '#f44336';
+                }
+                if ($status) {
+                    $status.textContent = data.capturing ? 'Recording' : 'Idle';
+                    $status.style.color = data.capturing ? '#ff9800' : '';
+                }
+                if ($filename) $filename.textContent = data.filename || '--';
+                if ($size) $size.textContent = formatFileSize(data.file_size || 0);
+                if ($packets) $packets.textContent = data.packet_count || '0';
+                if ($dropped) {
+                    $dropped.textContent = data.dropped_count || '0';
+                    $dropped.style.color = data.dropped_count > 0 ? '#ff9800' : '';
+                }
+                if ($toggle) {
+                    $toggle.textContent = data.capturing ? 'Stop Capture' : 'Start Capture';
+                    $toggle.disabled = !data.card_present && !data.capturing;
+                }
+                if ($download) $download.disabled = !data.filename || data.file_size === 0;
+                if ($delete) $delete.disabled = !data.filename || data.file_size === 0 || data.capturing;
+            })
+            .catch(function() { /* ignore poll errors */ });
+    }
+
+    function startCapturePoll() {
+        if (capPollTimer) return;
+        pollCaptureStatus();
+        capPollTimer = setInterval(pollCaptureStatus, 2000);
+    }
+
+    function stopCapturePoll() {
+        if (capPollTimer) {
+            clearInterval(capPollTimer);
+            capPollTimer = null;
+        }
+    }
+
+    window.toggleCapture = function() {
+        var url = capState.capturing ? '/api/capture/stop' : '/api/capture/start';
+        fetch(url, { method: 'POST' })
+            .then(function(r) { return r.json(); })
+            .then(function(data) {
+                if (data.ok) {
+                    toast(capState.capturing ? 'Capture stopped' : 'Capture started: ' + (data.filename || ''));
+                } else {
+                    toast(data.error || 'Capture error', 'error');
+                }
+                pollCaptureStatus();
+            })
+            .catch(function() { toast('Request failed', 'error'); });
+    };
+
+    window.downloadCapture = function() {
+        window.location.href = '/api/capture/download';
+    };
+
+    window.deleteCapture = function() {
+        if (!confirm('Delete the capture file?')) return;
+        fetch('/api/capture/delete', { method: 'POST' })
+            .then(function(r) { return r.json(); })
+            .then(function(data) {
+                if (data.ok) {
+                    toast('Capture file deleted');
+                } else {
+                    toast(data.error || 'Delete failed', 'error');
+                }
+                pollCaptureStatus();
+            })
+            .catch(function() { toast('Request failed', 'error'); });
+    };
+
+    /* Start polling when on dashboard */
+    var origSwitchSection = switchSection;
+    switchSection = function(name) {
+        origSwitchSection(name);
+        if (name === 'dashboard') {
+            startCapturePoll();
+        } else {
+            stopCapturePoll();
+        }
+    };
+
+    /* Initial poll if starting on dashboard */
+    if (activeSection === 'dashboard') {
+        startCapturePoll();
+    }
+
+    /* ================================================================
      * Hash-based navigation
      * ================================================================ */
 

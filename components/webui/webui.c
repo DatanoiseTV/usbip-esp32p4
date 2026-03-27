@@ -15,6 +15,9 @@
 #include "nvs_flash.h"
 #include "nvs.h"
 #include "mbedtls/base64.h"
+#if CONFIG_CAPTURE_ENABLED
+#include "capture.h"
+#endif
 
 #include <string.h>
 #include <stdio.h>
@@ -333,7 +336,7 @@ esp_err_t webui_init(void)
     config.core_id = 1;
     config.task_priority = 5;
     config.stack_size = 8192;
-    config.max_uri_handlers = 26;
+    config.max_uri_handlers = 32;
     config.max_open_sockets = 4;
     config.close_fn = on_sock_close;
 
@@ -408,6 +411,11 @@ esp_err_t webui_init(void)
 
     /* Register REST API endpoints */
     webui_api_register(s_server);
+
+#if CONFIG_CAPTURE_ENABLED
+    /* Register capture API endpoints */
+    capture_api_register(s_server);
+#endif
 
     /* Create stats broadcast timer (500ms interval) */
     const esp_timer_create_args_t timer_args = {

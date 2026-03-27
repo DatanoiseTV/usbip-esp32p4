@@ -19,6 +19,9 @@
 #include "transfer_engine.h"
 #include "usbip_server.h"
 #include "webui.h"
+#if CONFIG_CAPTURE_ENABLED
+#include "capture.h"
+#endif
 
 static const char *TAG = "main";
 
@@ -65,6 +68,16 @@ void app_main(void)
 
     ESP_ERROR_CHECK(transfer_engine_init());
     ESP_LOGI(TAG, "Transfer engine initialized");
+
+#if CONFIG_CAPTURE_ENABLED
+    /* capture_init is non-fatal if SD card is absent */
+    esp_err_t cap_ret = capture_init();
+    if (cap_ret == ESP_OK) {
+        ESP_LOGI(TAG, "Capture subsystem initialized");
+    } else {
+        ESP_LOGW(TAG, "Capture init: %s (non-fatal)", esp_err_to_name(cap_ret));
+    }
+#endif
 
     ESP_ERROR_CHECK(usbip_server_init());
     ESP_LOGI(TAG, "USB/IP server initialized");

@@ -14,6 +14,9 @@
 #include "device_manager.h"
 #include "usb_host_mgr.h"
 #include "event_log.h"
+#if CONFIG_CAPTURE_ENABLED
+#include "capture.h"
+#endif
 
 #include "usb/usb_host.h"
 #include "esp_log.h"
@@ -259,6 +262,20 @@ static int send_completed_reply(int fd, pending_urb_t *slot)
     reply.u.ret_submit.number_of_packets = (slot->num_iso > 0) ? reply_num_packets : (int32_t)0xFFFFFFFF;
     reply.u.ret_submit.error_count  = reply_error_count;
 
+    /* Capture RET_SUBMIT packet (before packing to network order) */
+#if CONFIG_CAPTURE_ENABLED
+    {
+        uint8_t *in_data = NULL;
+        uint32_t in_len = 0;
+        if (slot->direction == USBIP_DIR_IN && actual_length > 0 && reply_status == 0) {
+            in_data = slot->is_control ? (slot->xfer->data_buffer + 8) : slot->xfer->data_buffer;
+            in_len = (uint32_t)actual_length;
+        }
+        capture_submit_packet(CAPTURE_DIR_SERVER_TO_CLIENT,
+                              &reply, sizeof(reply), in_data, in_len);
+    }
+#endif
+
     usbip_pack_header(&reply, true);
 
     /* Send header */
@@ -454,6 +471,20 @@ static int handle_cmd_submit(int fd, usbip_header_t *hdr, const dm_device_info_t
         }
     }
 
+    /* Capture CMD_SUBMIT packet */
+#if CONFIG_CAPTURE_ENABLED
+    {
+        uint8_t *out_data = NULL;
+        uint32_t out_len = 0;
+        if (direction == USBIP_DIR_OUT && buflen > 0) {
+            out_data = is_control ? (xfer->data_buffer + 8) : xfer->data_buffer;
+            out_len = (uint32_t)buflen;
+        }
+        capture_submit_packet(CAPTURE_DIR_CLIENT_TO_SERVER,
+                              hdr, sizeof(*hdr), out_data, out_len);
+    }
+#endif
+
     /* For ISO: receive ISO packet descriptors from socket */
     if (num_iso > 0) {
         for (int i = 0; i < num_iso; i++) {
@@ -503,6 +534,11 @@ static int handle_cmd_unlink(int fd, usbip_header_t *hdr, const dm_device_info_t
              (unsigned long)seqnum,
              (unsigned long)unlink_seqnum);
 
+    /* Capture CMD_UNLINK packet */
+#if CONFIG_CAPTURE_ENABLED
+    capture_submit_packet(CAPTURE_DIR_CLIENT_TO_SERVER, hdr, sizeof(*hdr), NULL, 0);
+#endif
+
     int slot_idx = find_pending_by_seqnum(unlink_seqnum);
 
     if (slot_idx >= 0) {
@@ -533,6 +569,11 @@ static int handle_cmd_unlink(int fd, usbip_header_t *hdr, const dm_device_info_t
     reply.base.direction        = 0;
     reply.base.ep               = 0;
     reply.u.ret_unlink.status   = (slot_idx >= 0) ? -LINUX_ECONNRESET : 0;
+
+    /* Capture RET_UNLINK packet (before packing to network order) */
+#if CONFIG_CAPTURE_ENABLED
+    capture_submit_packet(CAPTURE_DIR_SERVER_TO_CLIENT, &reply, sizeof(reply), NULL, 0);
+#endif
 
     usbip_pack_header(&reply, true);
 

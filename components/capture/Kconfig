@@ -1,0 +1,13 @@
+menu "Packet Capture"
+    config CAPTURE_ENABLED
+        bool "Enable packet capture support"
+        default y
+    config CAPTURE_RING_BUF_SIZE
+        int "Ring buffer size (bytes)"
+        default 1048576
+        depends on CAPTURE_ENABLED
+    config CAPTURE_SNAPLEN
+        int "Max payload bytes per packet"
+        default 256
+        depends on CAPTURE_ENABLED
+endmenu

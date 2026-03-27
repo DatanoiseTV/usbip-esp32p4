@@ -8,6 +8,7 @@ idf_component_register(
         transfer_engine
         usbip_server
         webui
+        capture
         event_log
         access_control
         nvs_flash

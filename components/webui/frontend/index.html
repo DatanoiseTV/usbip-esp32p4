@@ -106,6 +106,40 @@
                 <div class="panel-title">Recent Events</div>
                 <div class="log-area" id="log-area"></div>
             </div>
+            <div class="panel">
+                <div class="panel-title">Packet Capture</div>
+                <div class="capture-status">
+                    <div class="info-row">
+                        <span>SD Card</span>
+                        <span id="cap-card" class="status-badge">--</span>
+                    </div>
+                    <div class="info-row">
+                        <span>Status</span>
+                        <span id="cap-status" class="status-badge">--</span>
+                    </div>
+                    <div class="info-row">
+                        <span>File</span>
+                        <span id="cap-filename">--</span>
+                    </div>
+                    <div class="info-row">
+                        <span>Size</span>
+                        <span id="cap-size">--</span>
+                    </div>
+                    <div class="info-row">
+                        <span>Packets</span>
+                        <span id="cap-packets">--</span>
+                    </div>
+                    <div class="info-row">
+                        <span>Dropped</span>
+                        <span id="cap-dropped">--</span>
+                    </div>
+                </div>
+                <div class="btn-row">
+                    <button class="btn" id="cap-toggle" onclick="toggleCapture()">Start Capture</button>
+                    <button class="btn" id="cap-download" onclick="downloadCapture()" disabled>Download</button>
+                    <button class="btn btn-danger" id="cap-delete" onclick="deleteCapture()" disabled>Delete</button>
+                </div>
+            </div>
         </section>
 
         <!-- Devices Section -->
