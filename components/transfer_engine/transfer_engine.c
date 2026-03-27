@@ -70,6 +70,7 @@ typedef struct {
     SemaphoreHandle_t sem;
     usb_transfer_status_t usb_status;
     bool is_control;
+    int dev_index;  // device_manager index for stats updates
 } pending_urb_t;
 
 static pending_urb_t s_pending[MAX_PENDING_URBS];
@@ -307,6 +308,12 @@ static int send_completed_reply(int fd, pending_urb_t *slot)
                  (long)reply_status);
     }
 
+    /* Update per-device throughput / error stats for WebUI */
+    device_manager_update_stats(slot->dev_index,
+        (slot->direction == USBIP_DIR_IN && reply_status == 0) ? (uint32_t)actual_length : 0,
+        (slot->direction == USBIP_DIR_OUT && reply_status == 0) ? (uint32_t)slot->buflen : 0,
+        reply_status == 0);
+
     return 0;
 }
 
@@ -314,7 +321,7 @@ static int send_completed_reply(int fd, pending_urb_t *slot)
 /* CMD_SUBMIT handler (non-blocking: submit and store in pending)      */
 /* ------------------------------------------------------------------ */
 
-static int handle_cmd_submit(int fd, usbip_header_t *hdr, const dm_device_info_t *devinfo)
+static int handle_cmd_submit(int fd, usbip_header_t *hdr, const dm_device_info_t *devinfo, int dev_index)
 {
     uint32_t seqnum   = hdr->base.seqnum;
     uint32_t ep       = hdr->base.ep;
@@ -404,6 +411,7 @@ static int handle_cmd_submit(int fd, usbip_header_t *hdr, const dm_device_info_t
     slot->sem           = sem;
     slot->usb_status    = USB_TRANSFER_STATUS_ERROR;
     slot->is_control    = is_control;
+    slot->dev_index     = dev_index;
 
     /* Get device handle */
     usb_device_handle_t dev_handle = usb_host_mgr_get_handle(devinfo->dev_addr);
@@ -637,7 +645,7 @@ int transfer_engine_run(int sockfd, const char *busid)
             int rc;
             switch (hdr.base.command) {
             case USBIP_CMD_SUBMIT:
-                rc = handle_cmd_submit(sockfd, &hdr, &devinfo);
+                rc = handle_cmd_submit(sockfd, &hdr, &devinfo, dev_index);
                 break;
             case USBIP_CMD_UNLINK:
                 rc = handle_cmd_unlink(sockfd, &hdr, &devinfo);
