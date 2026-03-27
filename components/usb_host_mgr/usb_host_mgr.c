@@ -474,34 +474,17 @@ static void usb_class_driver_task(void *arg)
             ESP_LOGD(TAG, "client_handle_events: %s", esp_err_to_name(err));
         }
 
-        /* Deferred: read string descriptors for newly added devices.
-         * This runs OUTSIDE the event callback, so it's safe to do
-         * synchronous control transfers here. */
-        for (int i = 0; i < MAX_TRACKED_DEVICES; i++) {
-            if (s_tracked[i].dev_hdl && s_tracked[i].needs_strings) {
-                s_tracked[i].needs_strings = false;
-                usb_device_handle_t dh = s_tracked[i].dev_hdl;
-                uint8_t addr = s_tracked[i].dev_addr;
-
-                const usb_device_desc_t *dd = NULL;
-                if (usb_host_get_device_descriptor(dh, &dd) == ESP_OK && dd) {
-                    char mfr[64] = {0}, prod[64] = {0}, ser[64] = {0};
-                    read_string_descriptor(dh, dd->iManufacturer, mfr, sizeof(mfr));
-                    read_string_descriptor(dh, dd->iProduct, prod, sizeof(prod));
-                    read_string_descriptor(dh, dd->iSerialNumber, ser, sizeof(ser));
-
-                    /* Update device_manager with the strings */
-                    int dm_idx = -1;
-                    char path[32];
-                    snprintf(path, sizeof(path), "1-%d", addr);
-                    if (device_manager_lookup(path, &dm_idx) == ESP_OK) {
-                        device_manager_update_strings(dm_idx, mfr, prod, ser);
-                        ESP_LOGI(TAG, "Device %s: mfr='%s' prod='%s' ser='%s'",
-                                 path, mfr, prod, ser);
-                    }
-                }
-            }
-        }
+        /*
+         * NOTE: String descriptor reading is disabled because ESP-IDF's USB host
+         * stack processes transfer completions inside usb_host_client_handle_events().
+         * Since this task is the one calling that function, submitting a synchronous
+         * control transfer here deadlocks: we block on a semaphore waiting for the
+         * completion callback, but the callback can only fire inside
+         * usb_host_client_handle_events() which we're not calling because we're blocked.
+         *
+         * String descriptors would require a separate dedicated task with its own
+         * USB host client registration. For now, devices are identified by VID:PID.
+         */
     }
 
     ESP_LOGI(TAG, "Class driver task stopping");
