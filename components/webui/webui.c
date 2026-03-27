@@ -129,12 +129,10 @@ esp_err_t webui_reject_auth(httpd_req_t *req)
 /* External symbols for embedded frontend files */
 extern const uint8_t index_html_start[] asm("_binary_index_html_start");
 extern const uint8_t index_html_end[]   asm("_binary_index_html_end");
-extern const uint8_t settings_html_start[] asm("_binary_settings_html_start");
-extern const uint8_t settings_html_end[]   asm("_binary_settings_html_end");
 extern const uint8_t style_css_start[] asm("_binary_style_css_start");
 extern const uint8_t style_css_end[]   asm("_binary_style_css_end");
-extern const uint8_t htmx_min_js_start[] asm("_binary_htmx_min_js_start");
-extern const uint8_t htmx_min_js_end[]   asm("_binary_htmx_min_js_end");
+extern const uint8_t app_js_start[] asm("_binary_app_js_start");
+extern const uint8_t app_js_end[]   asm("_binary_app_js_end");
 
 /* Declarations from ws_handler.c */
 extern void ws_handler_init(httpd_handle_t server);
@@ -158,10 +156,11 @@ static esp_err_t handle_index(httpd_req_t *req)
 
 static esp_err_t handle_settings(httpd_req_t *req)
 {
+    /* Redirect /settings to /#settings (SPA) */
     if (!auth_check_request(req)) return auth_reject(req);
-    httpd_resp_set_type(req, "text/html");
-    httpd_resp_send(req, (const char *)settings_html_start,
-                    settings_html_end - settings_html_start);
+    httpd_resp_set_status(req, "302 Found");
+    httpd_resp_set_hdr(req, "Location", "/#settings");
+    httpd_resp_send(req, NULL, 0);
     return ESP_OK;
 }
 
@@ -174,12 +173,12 @@ static esp_err_t handle_style_css(httpd_req_t *req)
     return ESP_OK;
 }
 
-static esp_err_t handle_htmx_js(httpd_req_t *req)
+static esp_err_t handle_app_js(httpd_req_t *req)
 {
     if (!auth_check_request(req)) return auth_reject(req);
     httpd_resp_set_type(req, "application/javascript");
-    httpd_resp_send(req, (const char *)htmx_min_js_start,
-                    htmx_min_js_end - htmx_min_js_start);
+    httpd_resp_send(req, (const char *)app_js_start,
+                    app_js_end - app_js_start);
     return ESP_OK;
 }
 
@@ -368,11 +367,11 @@ esp_err_t webui_init(void)
     };
     httpd_register_uri_handler(s_server, &uri_css);
 
-    const httpd_uri_t uri_htmx = {
-        .uri = "/htmx.min.js", .method = HTTP_GET,
-        .handler = handle_htmx_js, .user_ctx = NULL
+    const httpd_uri_t uri_app_js = {
+        .uri = "/app.js", .method = HTTP_GET,
+        .handler = handle_app_js, .user_ctx = NULL
     };
-    httpd_register_uri_handler(s_server, &uri_htmx);
+    httpd_register_uri_handler(s_server, &uri_app_js);
 
     /* API routes */
     const httpd_uri_t uri_api_devices = {

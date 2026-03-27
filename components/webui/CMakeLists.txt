@@ -5,7 +5,6 @@ idf_component_register(
     PRIV_REQUIRES esp_timer device_manager event_log access_control network_mgr mbedtls nvs_flash usb_host_mgr
     EMBED_FILES
         "frontend/index.html"
-        "frontend/settings.html"
         "frontend/style.css"
-        "frontend/htmx.min.js"
+        "frontend/app.js"
 )
