@@ -9,8 +9,9 @@
 <body>
     <div class="header">
         <div class="header-left">
-            <h1><span class="ws-indicator" id="ws-dot"></span>USB/IP Server</h1>
-            <div class="subtitle">ESP32-P4-Nano</div>
+            <span class="ws-indicator" id="ws-dot"></span>
+            <h1>USB/IP</h1>
+            <div class="subtitle">ESP32-P4</div>
         </div>
         <div class="header-right">
             <a href="/settings" title="Settings">&#9881;</a>
@@ -189,8 +190,9 @@
                     html += '<div class="device-info">';
                     html += '<div class="busid">' + esc(d.path) + '</div>';
                     html += '<div class="details">' +
-                        hex4(d.vid) + ':' + hex4(d.pid) + ' &middot; ' + speedStr(d.speed) +
-                        '</div>';
+                        hex4(d.vid) + ':' + hex4(d.pid) +
+                        ' <span class="speed-badge">' + speedStr(d.speed) + '</span> ' +
+                        st + '</div>';
                     if (d.state === 1 && d.client_ip) {
                         html += '<div class="client">Client: ' + ip4str(d.client_ip) + '</div>';
                     }
@@ -256,8 +258,8 @@
 
             ctx.clearRect(0, 0, w, 120);
 
-            // Grid lines
-            ctx.strokeStyle = '#334155';
+            // Grid lines - light theme
+            ctx.strokeStyle = '#e2e8f0';
             ctx.lineWidth = 0.5;
             for (var y = 0; y < 120; y += 30) {
                 ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(w, y); ctx.stroke();
@@ -266,7 +268,7 @@
             var step = w / 59;
 
             // IN line
-            ctx.strokeStyle = '#38bdf8';
+            ctx.strokeStyle = '#3182ce';
             ctx.lineWidth = 1.5;
             ctx.beginPath();
             for (var i = 0; i < 60; i++) {
@@ -277,7 +279,8 @@
             ctx.stroke();
 
             // OUT line
-            ctx.strokeStyle = '#4ade80';
+            ctx.strokeStyle = '#38a169';
+            ctx.lineWidth = 1.5;
             ctx.beginPath();
             for (var i = 0; i < 60; i++) {
                 var x = i * step;
