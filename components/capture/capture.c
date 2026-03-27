@@ -13,6 +13,10 @@
 #include "driver/sdmmc_host.h"
 #include "sdmmc_cmd.h"
 #include "esp_vfs_fat.h"
+#include "soc/soc_caps.h"
+#if SOC_SDMMC_IO_POWER_EXTERNAL
+#include "esp_ldo_regulator.h"
+#endif
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -211,6 +215,19 @@ static void ring_peek(const capture_ring_t *r, void *data, uint32_t len)
 
 static esp_err_t sd_mount(void)
 {
+    /* ESP32-P4 requires external LDO power for SDMMC IO */
+#if SOC_SDMMC_IO_POWER_EXTERNAL
+    esp_ldo_channel_handle_t ldo_sdio = NULL;
+    esp_ldo_channel_config_t ldo_sdio_config = {
+        .chan_id = 4,
+        .voltage_mv = 3300,
+    };
+    esp_err_t ldo_err = esp_ldo_acquire_channel(&ldo_sdio_config, &ldo_sdio);
+    if (ldo_err != ESP_OK) {
+        ESP_LOGW(TAG, "Failed to acquire SDMMC LDO: %s", esp_err_to_name(ldo_err));
+    }
+#endif
+
     sdmmc_host_t host = SDMMC_HOST_DEFAULT();
     host.max_freq_khz = 40000;
 
