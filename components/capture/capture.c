@@ -15,7 +15,7 @@
 #include "esp_vfs_fat.h"
 #include "soc/soc_caps.h"
 #if SOC_SDMMC_IO_POWER_EXTERNAL
-#include "esp_ldo_regulator.h"
+#include "sd_pwr_ctrl_by_on_chip_ldo.h"
 #endif
 
 #include "freertos/FreeRTOS.h"
@@ -215,21 +215,23 @@ static void ring_peek(const capture_ring_t *r, void *data, uint32_t len)
 
 static esp_err_t sd_mount(void)
 {
-    /* ESP32-P4 requires external LDO power for SDMMC IO */
-#if SOC_SDMMC_IO_POWER_EXTERNAL
-    esp_ldo_channel_handle_t ldo_sdio = NULL;
-    esp_ldo_channel_config_t ldo_sdio_config = {
-        .chan_id = 4,
-        .voltage_mv = 3300,
-    };
-    esp_err_t ldo_err = esp_ldo_acquire_channel(&ldo_sdio_config, &ldo_sdio);
-    if (ldo_err != ESP_OK) {
-        ESP_LOGW(TAG, "Failed to acquire SDMMC LDO: %s", esp_err_to_name(ldo_err));
-    }
-#endif
-
     sdmmc_host_t host = SDMMC_HOST_DEFAULT();
-    host.max_freq_khz = 40000;
+    host.max_freq_khz = SDMMC_FREQ_HIGHSPEED;
+
+    /* ESP32-P4 Slot 0 (GPIO39-48) requires internal LDO to power VDD_IO_5.
+     * LDO channel 4 provides the IO voltage for these pins. */
+#if SOC_SDMMC_IO_POWER_EXTERNAL
+    sd_pwr_ctrl_ldo_config_t ldo_config = {
+        .ldo_chan_id = 4,
+    };
+    sd_pwr_ctrl_handle_t pwr_ctrl_handle = NULL;
+    esp_err_t ldo_err = sd_pwr_ctrl_new_on_chip_ldo(&ldo_config, &pwr_ctrl_handle);
+    if (ldo_err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to init SD power control LDO: %s", esp_err_to_name(ldo_err));
+        return ldo_err;
+    }
+    host.pwr_ctrl_handle = pwr_ctrl_handle;
+#endif
 
     sdmmc_slot_config_t slot = SDMMC_SLOT_CONFIG_DEFAULT();
     slot.width = 4;
