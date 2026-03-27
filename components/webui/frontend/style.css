@@ -569,13 +569,15 @@ body {
 
 /* ---- Topology ---- */
 .topology-container {
-    background: var(--surface);
+    background: #f8f9fc;
     border: 1px solid var(--border);
     border-radius: var(--radius);
     padding: 1.5rem;
     box-shadow: var(--shadow);
     overflow: auto;
     text-align: center;
+    display: flex;
+    justify-content: center;
 }
 
 .topology-container svg {
@@ -589,6 +591,11 @@ body {
     stroke: var(--border);
     stroke-width: 1.5;
     rx: 8;
+    transition: filter 0.15s;
+}
+
+.topology-container .topo-node:hover rect {
+    filter: drop-shadow(0 2px 6px rgba(0, 0, 0, 0.1));
 }
 
 .topology-container .topo-node text {
@@ -598,19 +605,25 @@ body {
 }
 
 .topology-container .topo-edge line {
-    stroke: var(--border);
+    stroke: #cbd5e1;
     stroke-width: 1.5;
 }
 
 .topology-container .topo-hub rect {
     fill: rgba(59, 130, 246, 0.06);
     stroke: var(--accent);
+    stroke-width: 2;
+    stroke-dasharray: 6 3;
+}
+
+.topology-container .topo-imported rect {
+    stroke: var(--green);
+    stroke-width: 2;
 }
 
 /* ---- Settings forms ---- */
 .form-group {
     margin-bottom: 1rem;
-    padding: 0 1.25rem;
 }
 
 .form-group:last-child {

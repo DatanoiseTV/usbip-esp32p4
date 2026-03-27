@@ -524,7 +524,6 @@
             var spdCls = speedClass(d.speed);
             var stCls = stateClass(d.state);
             var stStr = stateStr(d.state);
-            var devName = d.prod || d.mfr || ('Device ' + hex4(d.vid) + ':' + hex4(d.pid));
             var clientStr = d.client_ip ? ip4str(d.client_ip) : '';
 
             /* Determine primary class from icl */
@@ -540,6 +539,8 @@
                     primaryClass = USB_CLASS[d.icl[0]] || '';
                 }
             }
+
+            var devName = d.prod || d.mfr || primaryClass || 'Unknown Device';
 
             var card = existingMap[d.idx];
             if (card) {
@@ -779,8 +780,10 @@
         var rootDevices = [];   /* direct on root hub */
         var hubChildren = {};   /* hubIdx -> [{ port, device }] */
         var hubIndices = {};    /* device idx -> true if it's a hub */
+        var virtualHubs = {};   /* path -> virtual hub object */
+        var nextVirtualIdx = -1000; /* negative idx for virtual hubs */
 
-        /* Detect hubs */
+        /* Detect hubs from class codes */
         for (var h = 0; h < devices.length; h++) {
             var dh = devices[h];
             if (dh.icl) {
@@ -803,6 +806,46 @@
         for (var dp = 0; dp < sorted.length; dp++) {
             devByPath[sorted[dp].path] = sorted[dp];
         }
+
+        /* First pass: infer virtual hubs from child paths */
+        for (var vi = 0; vi < sorted.length; vi++) {
+            var vdev = sorted[vi];
+            var vparts = vdev.path.split('.');
+            if (vparts.length > 1) {
+                var vparentPath = vparts.slice(0, -1).join('.');
+                if (!devByPath[vparentPath] && !virtualHubs[vparentPath]) {
+                    /* Extract hub address from path (e.g. "1-3" -> addr 3) */
+                    var addrMatch = vparentPath.match(/-(\d+)/);
+                    var hubAddr = addrMatch ? addrMatch[1] : '?';
+                    var vhub = {
+                        idx: nextVirtualIdx--,
+                        path: vparentPath,
+                        vid: 0, pid: 0,
+                        speed: 2, /* default HS */
+                        state: 0,
+                        icl: [0x09],
+                        bi: 0, bo: 0,
+                        prod: 'Hub',
+                        mfr: '',
+                        _virtual: true,
+                        _hubAddr: hubAddr
+                    };
+                    virtualHubs[vparentPath] = vhub;
+                    devByPath[vparentPath] = vhub;
+                    hubIndices[vhub.idx] = true;
+                }
+            }
+        }
+
+        /* Add virtual hubs to sorted list and re-sort */
+        for (var vp in virtualHubs) {
+            if (virtualHubs.hasOwnProperty(vp)) {
+                sorted.push(virtualHubs[vp]);
+            }
+        }
+        sorted.sort(function(a, b) {
+            return a.path < b.path ? -1 : a.path > b.path ? 1 : 0;
+        });
 
         for (var s = 0; s < sorted.length; s++) {
             var dev = sorted[s];
@@ -837,12 +880,13 @@
         for (var ri = 0; ri < rootDevices.length; ri++) {
             var rd = rootDevices[ri];
             var children = hubChildren[rd.idx] || [];
-            if (hubIndices[rd.idx] && children.length > 0) {
+            var isHub = !!(hubIndices[rd.idx] || children.length > 0);
+            if (isHub && children.length > 0) {
                 /* Hub needs width for all children */
                 var hubW = Math.max(nodeW, children.length * (nodeW + hGap) - hGap);
                 columns.push({ dev: rd, width: hubW, children: children, isHub: true });
             } else {
-                columns.push({ dev: rd, width: nodeW, children: [], isHub: false });
+                columns.push({ dev: rd, width: nodeW, children: [], isHub: isHub });
             }
         }
 
@@ -878,8 +922,13 @@
             var d = col.dev;
             var borderColor = d.state === 1 ? '#22c55e' : d.state === 0 ? '#3b82f6' : '#94a3b8';
             var nh = col.isHub ? hubNodeH : nodeH;
-            var vidpid = hex4(d.vid) + ':' + hex4(d.pid);
+            var vidpid = d._virtual ? 'Addr ' + d._hubAddr : hex4(d.vid) + ':' + hex4(d.pid);
             var prodLabel = d.prod || '';
+            if (!prodLabel && d.icl && d.icl.length > 0) {
+                for (var plc = 0; plc < d.icl.length; plc++) {
+                    if (d.icl[plc] !== 0 && USB_CLASS[d.icl[plc]]) { prodLabel = USB_CLASS[d.icl[plc]]; break; }
+                }
+            }
             if (prodLabel.length > 15) prodLabel = prodLabel.substring(0, 13) + '..';
 
             /* Line from root to device */
@@ -892,7 +941,9 @@
 
             /* Device node */
             var nodeClass = col.isHub ? 'topo-hub' : 'topo-node';
-            svg += '<g class="' + nodeClass + '" style="cursor:pointer" onclick="window._showDevice(' + d.idx + ')">';
+            if (d.state === 1) nodeClass += ' topo-imported';
+            var clickAttr = d._virtual ? '' : ' style="cursor:pointer" onclick="window._showDevice(' + d.idx + ')"';
+            svg += '<g class="' + nodeClass + '"' + clickAttr + '>';
             svg += '<rect x="' + (colCenter - nodeW / 2) + '" y="' + tier1Y + '" width="' + nodeW + '" height="' + nh + '" rx="8" fill="' + (col.isHub ? 'rgba(59,130,246,0.06)' : '#fff') + '" stroke="' + borderColor + '" stroke-width="1.5"/>';
             svg += '<text x="' + colCenter + '" y="' + (tier1Y + 14) + '" text-anchor="middle" font-family="system-ui" font-size="10" font-weight="600" fill="#1a202c">' + esc(d.path) + '</text>';
             svg += '<text x="' + colCenter + '" y="' + (tier1Y + 26) + '" text-anchor="middle" font-family="system-ui" font-size="9" fill="#64748b">' + esc(vidpid) + '</text>';
@@ -929,6 +980,11 @@
                     var childBorder = child.state === 1 ? '#22c55e' : child.state === 0 ? '#3b82f6' : '#94a3b8';
                     var cVidpid = hex4(child.vid) + ':' + hex4(child.pid);
                     var cProdLabel = child.prod || '';
+                    if (!cProdLabel && child.icl && child.icl.length > 0) {
+                        for (var cplc = 0; cplc < child.icl.length; cplc++) {
+                            if (child.icl[cplc] !== 0 && USB_CLASS[child.icl[cplc]]) { cProdLabel = USB_CLASS[child.icl[cplc]]; break; }
+                        }
+                    }
                     if (cProdLabel.length > 15) cProdLabel = cProdLabel.substring(0, 13) + '..';
 
                     /* Connecting line */
@@ -940,7 +996,8 @@
                     svg += '</g>';
 
                     /* Child device node */
-                    svg += '<g class="topo-node" style="cursor:pointer" onclick="window._showDevice(' + child.idx + ')">';
+                    var childNodeClass = 'topo-node' + (child.state === 1 ? ' topo-imported' : '');
+                    svg += '<g class="' + childNodeClass + '" style="cursor:pointer" onclick="window._showDevice(' + child.idx + ')">';
                     svg += '<rect x="' + (cx - nodeW / 2) + '" y="' + tier2Y + '" width="' + nodeW + '" height="' + nodeH + '" rx="8" fill="#fff" stroke="' + childBorder + '" stroke-width="1.5"/>';
                     svg += '<text x="' + cx + '" y="' + (tier2Y + 14) + '" text-anchor="middle" font-family="system-ui" font-size="10" font-weight="600" fill="#1a202c">' + esc(child.path) + '</text>';
                     svg += '<text x="' + cx + '" y="' + (tier2Y + 26) + '" text-anchor="middle" font-family="system-ui" font-size="9" fill="#64748b">' + esc(cVidpid) + '</text>';
