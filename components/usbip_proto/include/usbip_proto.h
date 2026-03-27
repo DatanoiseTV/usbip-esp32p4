@@ -13,7 +13,6 @@ extern "C" {
 #endif
 
 /* USB/IP protocol versions */
-#define USBIP_VERSION_V100  0x0100
 #define USBIP_VERSION_V111  0x0111
 #define USBIP_VERSION       USBIP_VERSION_V111
 

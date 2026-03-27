@@ -97,7 +97,7 @@ void usbip_pack_devlist_reply(usbip_op_devlist_reply_t *rep, bool pack)
 
 bool usbip_version_supported(uint16_t version)
 {
-    return (version == USBIP_VERSION_V100) || (version == USBIP_VERSION_V111);
+    return (version == USBIP_VERSION_V111);
 }
 
 /* --- Network I/O helpers --- */
