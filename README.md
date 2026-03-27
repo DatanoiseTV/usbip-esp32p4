@@ -188,13 +188,38 @@ To restrict access:
 
 Settings are persisted in NVS and survive reboots.
 
+## Use Cases
+
+- **Remote USB dongles** - share USB license dongles, security keys (FIDO2/U2F), or hardware tokens across the network without physical access
+- **IC/MCU programmers** - flash and debug embedded devices remotely (JTAG/SWD adapters, UART bridges, ISP programmers)
+- **Lab equipment** - share USB test instruments (oscilloscopes, logic analyzers, multimeters) between workstations
+- **USB peripherals** - use USB barcode scanners, card readers, or specialized input devices from any machine on the network
+- **Build servers** - attach USB devices to CI/CD runners for hardware-in-the-loop testing
+- **Thin clients** - redirect USB storage, printers, or other peripherals to virtual machines or remote desktops
+- **Headless servers** - access USB devices plugged into rack-mounted ESP32-P4 units without physical console access
+
+## Performance
+
+The effective throughput is limited by the **100 Mbps Ethernet** link and the ESP32-P4's processing overhead for USB/IP protocol conversion. While the USB 2.0 HS bus supports 480 Mbps, the achievable USB/IP throughput is:
+
+| Bottleneck | Limit |
+|------------|-------|
+| Ethernet wire speed | ~12 MB/s (100 Mbps) |
+| TCP/IP overhead | ~11 MB/s effective |
+| USB/IP protocol overhead | ~10 MB/s for bulk transfers |
+| Practical throughput | **5-10 MB/s** depending on transfer pattern |
+
+This is more than sufficient for most USB devices. IC programmers, HID devices, dongles, serial adapters, and even many storage operations work well within these limits. Devices that require sustained high-bandwidth (e.g., USB 2.0 webcams at high resolution) may experience reduced frame rates.
+
+**Latency** is typically 1-3 ms per USB transaction over a local Ethernet network.
+
 ## Known Limitations
 
 - **USB 2.0 only** - no USB 3.x SuperSpeed (hardware limitation)
-- **Ethernet only** - no WiFi transport (by design, for reliability)
+- **Ethernet only** - no WiFi transport (by design, for reliability and latency)
 - **No Transaction Translator** - FS/LS devices only work when connected directly to the root port, not through HS hubs (ESP-IDF limitation)
-- **Synchronous transfers** - URBs are processed one at a time per connection; high-throughput pipelined workloads may see reduced performance
-- **100 Mbps Ethernet** - theoretical maximum ~12 MB/s, sufficient for most USB 2.0 devices
+- **100 Mbps Ethernet** - throughput limited by network, not USB bus speed (see Performance section)
+- **ESP-IDF USB host stack** - some devices with multiple configurations may have enumeration issues
 
 ## License
 
