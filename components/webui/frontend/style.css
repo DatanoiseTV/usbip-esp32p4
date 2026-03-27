@@ -572,16 +572,16 @@ body {
     background: var(--surface);
     border: 1px solid var(--border);
     border-radius: var(--radius);
-    min-height: 400px;
     padding: 1.5rem;
     box-shadow: var(--shadow);
     overflow: auto;
+    text-align: center;
 }
 
 .topology-container svg {
-    width: 100%;
+    max-width: 100%;
     height: auto;
-    min-height: 350px;
+    max-height: 400px;
 }
 
 .topology-container .topo-node rect {
@@ -594,7 +594,7 @@ body {
 .topology-container .topo-node text {
     fill: var(--text);
     font-family: var(--font);
-    font-size: 12px;
+    font-size: 10px;
 }
 
 .topology-container .topo-edge line {

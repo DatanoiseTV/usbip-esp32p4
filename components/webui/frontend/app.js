@@ -726,6 +726,7 @@
             html += '<button class="btn btn-sm btn-secondary" onclick="window._deviceAction(\'disconnect\',' + idx + ')">Disconnect Client</button>';
         }
         html += '<button class="btn btn-sm btn-secondary" onclick="window._deviceAction(\'export\',' + idx + ')">Toggle Export</button>';
+        html += '<button class="btn btn-sm btn-danger" onclick="if(confirm(\'Eject this device?\'))window._deviceAction(\'disconnect\',' + idx + ')">Eject</button>';
         html += '<button class="btn btn-sm btn-warn" onclick="window._deviceAction(\'reset\',' + idx + ')">Reset</button>';
         html += '</div>';
 
@@ -769,7 +770,7 @@
 
     function buildTopology(devices) {
         if (!devices || !devices.length) {
-            $topologySvg.innerHTML = '<svg viewBox="0 0 600 120"><text x="300" y="60" text-anchor="middle" fill="#94a3b8" font-family="system-ui" font-size="14">No devices connected</text></svg>';
+            $topologySvg.innerHTML = '<svg viewBox="0 0 500 100"><text x="250" y="50" text-anchor="middle" fill="#94a3b8" font-family="system-ui" font-size="12">No devices connected</text></svg>';
             return;
         }
 
@@ -825,11 +826,11 @@
         }
 
         /* Layout constants */
-        var nodeW = 150, nodeH = 52;
-        var hubNodeH = 70;
-        var rootY = 20, tier1Y = 110, tier2Y = 220;
-        var hGap = 20;
-        var rootNodeW = 190, rootNodeH = 40;
+        var nodeW = 120, nodeH = 44;
+        var hubNodeH = 56;
+        var rootY = 15, tier1Y = 80, tier2Y = 170;
+        var hGap = 16;
+        var rootNodeW = 160, rootNodeH = 32;
 
         /* Calculate total width needed */
         var columns = [];
@@ -864,7 +865,7 @@
         var rootX = totalWidth / 2;
         svg += '<g class="topo-node">';
         svg += '<rect x="' + (rootX - rootNodeW / 2) + '" y="' + rootY + '" width="' + rootNodeW + '" height="' + rootNodeH + '" rx="8" fill="#fff" stroke="#3b82f6" stroke-width="2"/>';
-        svg += '<text x="' + rootX + '" y="' + (rootY + 24) + '" text-anchor="middle" font-family="system-ui" font-size="12" font-weight="600" fill="#1a202c">ESP32-P4 Host Controller</text>';
+        svg += '<text x="' + rootX + '" y="' + (rootY + 21) + '" text-anchor="middle" font-family="system-ui" font-size="11" font-weight="600" fill="#1a202c">ESP32-P4 Host Controller</text>';
         svg += '</g>';
 
         /* Place tier 1 columns */
@@ -877,29 +878,33 @@
             var d = col.dev;
             var borderColor = d.state === 1 ? '#22c55e' : d.state === 0 ? '#3b82f6' : '#94a3b8';
             var nh = col.isHub ? hubNodeH : nodeH;
-            var devLabel = d.prod || d.mfr || hex4(d.vid) + ':' + hex4(d.pid);
-            if (devLabel.length > 18) devLabel = devLabel.substring(0, 16) + '..';
+            var vidpid = hex4(d.vid) + ':' + hex4(d.pid);
+            var prodLabel = d.prod || '';
+            if (prodLabel.length > 15) prodLabel = prodLabel.substring(0, 13) + '..';
 
             /* Line from root to device */
             var rootBottom = rootY + rootNodeH;
             svg += '<g class="topo-edge">';
-            svg += '<line x1="' + rootX + '" y1="' + rootBottom + '" x2="' + rootX + '" y2="' + (rootBottom + 15) + '" stroke="#cbd5e1" stroke-width="1.5"/>';
-            svg += '<line x1="' + rootX + '" y1="' + (rootBottom + 15) + '" x2="' + colCenter + '" y2="' + (rootBottom + 15) + '" stroke="#cbd5e1" stroke-width="1.5"/>';
-            svg += '<line x1="' + colCenter + '" y1="' + (rootBottom + 15) + '" x2="' + colCenter + '" y2="' + tier1Y + '" stroke="#cbd5e1" stroke-width="1.5"/>';
+            svg += '<line x1="' + rootX + '" y1="' + rootBottom + '" x2="' + rootX + '" y2="' + (rootBottom + 12) + '" stroke="#cbd5e1" stroke-width="1.5"/>';
+            svg += '<line x1="' + rootX + '" y1="' + (rootBottom + 12) + '" x2="' + colCenter + '" y2="' + (rootBottom + 12) + '" stroke="#cbd5e1" stroke-width="1.5"/>';
+            svg += '<line x1="' + colCenter + '" y1="' + (rootBottom + 12) + '" x2="' + colCenter + '" y2="' + tier1Y + '" stroke="#cbd5e1" stroke-width="1.5"/>';
             svg += '</g>';
 
             /* Device node */
             var nodeClass = col.isHub ? 'topo-hub' : 'topo-node';
             svg += '<g class="' + nodeClass + '" style="cursor:pointer" onclick="window._showDevice(' + d.idx + ')">';
             svg += '<rect x="' + (colCenter - nodeW / 2) + '" y="' + tier1Y + '" width="' + nodeW + '" height="' + nh + '" rx="8" fill="' + (col.isHub ? 'rgba(59,130,246,0.06)' : '#fff') + '" stroke="' + borderColor + '" stroke-width="1.5"/>';
-            svg += '<text x="' + colCenter + '" y="' + (tier1Y + 20) + '" text-anchor="middle" font-family="system-ui" font-size="11" font-weight="600" fill="#1a202c">' + esc(d.path) + '</text>';
-            svg += '<text x="' + colCenter + '" y="' + (tier1Y + 35) + '" text-anchor="middle" font-family="system-ui" font-size="10" fill="#64748b">' + esc(devLabel) + '</text>';
+            svg += '<text x="' + colCenter + '" y="' + (tier1Y + 14) + '" text-anchor="middle" font-family="system-ui" font-size="10" font-weight="600" fill="#1a202c">' + esc(d.path) + '</text>';
+            svg += '<text x="' + colCenter + '" y="' + (tier1Y + 26) + '" text-anchor="middle" font-family="system-ui" font-size="9" fill="#64748b">' + esc(vidpid) + '</text>';
+            if (prodLabel) {
+                svg += '<text x="' + colCenter + '" y="' + (tier1Y + 37) + '" text-anchor="middle" font-family="system-ui" font-size="8" fill="#94a3b8">' + esc(prodLabel) + '</text>';
+            }
 
             /* Speed badge in SVG */
             var spdTxt = speedStr(d.speed);
             var badgeCols = { 'HS': '#22c55e', 'FS': '#3b82f6', 'LS': '#f59e0b', 'SS': '#9333ea' };
             var badgeCol = badgeCols[spdTxt] || '#94a3b8';
-            svg += '<text x="' + (colCenter + nodeW / 2 - 10) + '" y="' + (tier1Y + 14) + '" text-anchor="end" font-family="system-ui" font-size="9" font-weight="700" fill="' + badgeCol + '">' + spdTxt + '</text>';
+            svg += '<text x="' + (colCenter + nodeW / 2 - 8) + '" y="' + (tier1Y + 12) + '" text-anchor="end" font-family="system-ui" font-size="8" font-weight="700" fill="' + badgeCol + '">' + spdTxt + '</text>';
 
             if (col.isHub && col.children.length > 0) {
                 /* Draw port circles along bottom of hub */
@@ -922,26 +927,30 @@
                     var child = col.children[ki].device;
                     var cx = childStartX + ki * (nodeW + hGap) + nodeW / 2;
                     var childBorder = child.state === 1 ? '#22c55e' : child.state === 0 ? '#3b82f6' : '#94a3b8';
-                    var childLabel = child.prod || child.mfr || hex4(child.vid) + ':' + hex4(child.pid);
-                    if (childLabel.length > 18) childLabel = childLabel.substring(0, 16) + '..';
+                    var cVidpid = hex4(child.vid) + ':' + hex4(child.pid);
+                    var cProdLabel = child.prod || '';
+                    if (cProdLabel.length > 15) cProdLabel = cProdLabel.substring(0, 13) + '..';
 
                     /* Connecting line */
                     var hubBottom = tier1Y + nh;
                     svg += '<g class="topo-edge">';
-                    svg += '<line x1="' + colCenter + '" y1="' + hubBottom + '" x2="' + colCenter + '" y2="' + (hubBottom + 15) + '" stroke="#cbd5e1" stroke-width="1.5"/>';
-                    svg += '<line x1="' + colCenter + '" y1="' + (hubBottom + 15) + '" x2="' + cx + '" y2="' + (hubBottom + 15) + '" stroke="#cbd5e1" stroke-width="1.5"/>';
-                    svg += '<line x1="' + cx + '" y1="' + (hubBottom + 15) + '" x2="' + cx + '" y2="' + tier2Y + '" stroke="#cbd5e1" stroke-width="1.5"/>';
+                    svg += '<line x1="' + colCenter + '" y1="' + hubBottom + '" x2="' + colCenter + '" y2="' + (hubBottom + 12) + '" stroke="#cbd5e1" stroke-width="1.5"/>';
+                    svg += '<line x1="' + colCenter + '" y1="' + (hubBottom + 12) + '" x2="' + cx + '" y2="' + (hubBottom + 12) + '" stroke="#cbd5e1" stroke-width="1.5"/>';
+                    svg += '<line x1="' + cx + '" y1="' + (hubBottom + 12) + '" x2="' + cx + '" y2="' + tier2Y + '" stroke="#cbd5e1" stroke-width="1.5"/>';
                     svg += '</g>';
 
                     /* Child device node */
                     svg += '<g class="topo-node" style="cursor:pointer" onclick="window._showDevice(' + child.idx + ')">';
                     svg += '<rect x="' + (cx - nodeW / 2) + '" y="' + tier2Y + '" width="' + nodeW + '" height="' + nodeH + '" rx="8" fill="#fff" stroke="' + childBorder + '" stroke-width="1.5"/>';
-                    svg += '<text x="' + cx + '" y="' + (tier2Y + 20) + '" text-anchor="middle" font-family="system-ui" font-size="11" font-weight="600" fill="#1a202c">' + esc(child.path) + '</text>';
-                    svg += '<text x="' + cx + '" y="' + (tier2Y + 35) + '" text-anchor="middle" font-family="system-ui" font-size="10" fill="#64748b">' + esc(childLabel) + '</text>';
+                    svg += '<text x="' + cx + '" y="' + (tier2Y + 14) + '" text-anchor="middle" font-family="system-ui" font-size="10" font-weight="600" fill="#1a202c">' + esc(child.path) + '</text>';
+                    svg += '<text x="' + cx + '" y="' + (tier2Y + 26) + '" text-anchor="middle" font-family="system-ui" font-size="9" fill="#64748b">' + esc(cVidpid) + '</text>';
+                    if (cProdLabel) {
+                        svg += '<text x="' + cx + '" y="' + (tier2Y + 37) + '" text-anchor="middle" font-family="system-ui" font-size="8" fill="#94a3b8">' + esc(cProdLabel) + '</text>';
+                    }
 
                     var cSpdTxt = speedStr(child.speed);
                     var cBadgeCol = badgeCols[cSpdTxt] || '#94a3b8';
-                    svg += '<text x="' + (cx + nodeW / 2 - 10) + '" y="' + (tier2Y + 14) + '" text-anchor="end" font-family="system-ui" font-size="9" font-weight="700" fill="' + cBadgeCol + '">' + cSpdTxt + '</text>';
+                    svg += '<text x="' + (cx + nodeW / 2 - 8) + '" y="' + (tier2Y + 12) + '" text-anchor="end" font-family="system-ui" font-size="8" font-weight="700" fill="' + cBadgeCol + '">' + cSpdTxt + '</text>';
 
                     svg += '</g>';
                 }
