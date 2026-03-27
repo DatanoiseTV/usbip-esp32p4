@@ -147,38 +147,42 @@ Written once at the start of each capture file:
 | thiszone           | `0`                | GMT                            |
 | sigfigs            | `0`                |                                |
 | snaplen            | `65535`            | Max capture length             |
-| network            | `147` (LINKTYPE_USER0) | Custom user-defined link type |
+| network            | `220` (LINKTYPE_USB_LINUX_MMAPPED) | Linux usbmon format, native Wireshark support |
 
-**Rationale for LINKTYPE_USER0 (147):** There is no standard PCAP link type for USB/IP wire protocol. LINKTYPE_USB_LINUX_MMAPPED (220) encodes Linux URB metadata that does not match our data. Using a "user" DLT range (147-162) is the PCAP-sanctioned approach for private/application-specific framing. Wireshark can be configured with a custom dissector for DLT 147 to decode these captures. Alternatively, a future Wireshark dissector plugin could be provided.
+**Rationale for LINKTYPE_USB_LINUX_MMAPPED (220):** Wireshark has native dissection for this format. Each packet uses a 64-byte pseudo-header (`struct mon_bin_hdr`) that maps directly from USB/IP fields:
 
-### Packet Record Header (20 bytes)
+| Offset | Size | Field | USB/IP mapping |
+|--------|------|-------|----------------|
+| 0 | 8 | id | seqnum (used as URB ID) |
+| 8 | 1 | type | 'S' for CMD_SUBMIT, 'C' for RET_SUBMIT |
+| 9 | 1 | transfer_type | 0=ISO,1=INT,2=CTRL,3=BULK (from endpoint/setup) |
+| 10 | 1 | endpoint | ep number with direction bit 7 |
+| 11 | 1 | device | dev_addr |
+| 12 | 2 | bus_id | 1 |
+| 14 | 1 | setup_flag | 0 if control with setup, else 0xFF |
+| 15 | 1 | data_flag | 0 if data present, else 1 |
+| 16 | 8 | ts_sec + ts_usec | esp_timer microseconds split |
+| 24 | 4 | status | 0 for submit, Linux errno for complete |
+| 28 | 4 | urb_len | transfer_buffer_length |
+| 32 | 4 | data_len | actual captured data length |
+| 36 | 8 | setup[8] | setup packet (control only) |
+| 44 | 4 | interval | interval field |
+| 48 | 4 | start_frame | start_frame field |
+| 52 | 4 | xfer_flags | transfer_flags |
+| 56 | 4 | ndesc | number_of_packets (ISO) |
+| 60 | 4 | padding | 0 |
 
-Each captured packet uses the standard 16-byte PCAP record header plus a 4-byte custom direction prefix in the packet data:
+This gives full Wireshark USB analysis: device/endpoint filtering, transfer type coloring, setup packet decoding, payload hex dump, request/response pairing via URB ID.
 
-**PCAP record header (16 bytes):**
+### Packet Record
 
-| Field          | Size | Description                           |
-|----------------|------|---------------------------------------|
-| ts_sec         | 4    | Timestamp seconds (from `esp_timer`)  |
-| ts_usec        | 4    | Timestamp microseconds                |
-| incl_len       | 4    | Bytes of packet data saved            |
-| orig_len       | 4    | Original packet length                |
-
-**Packet data layout:**
+Each captured packet uses the standard 16-byte PCAP record header followed by a 64-byte Linux USB pseudo-header and then payload data:
 
 ```
-[4 bytes: direction/flags] [48 bytes: usbip_header_t] [N bytes: payload]
+[16 bytes: pcap_rec_hdr] [64 bytes: mon_bin_hdr] [N bytes: USB data payload]
 ```
 
-Direction/flags word (network byte order):
-- Bit 0: direction (0 = client-to-server, 1 = server-to-client)
-- Bits 1-31: reserved (zero)
-
-The payload portion is:
-- For CMD_SUBMIT OUT: the transfer buffer data sent by the client
-- For RET_SUBMIT IN: the transfer buffer data returned by the device
-- For CMD_UNLINK / RET_UNLINK: empty (header only)
-- ISO packet descriptors are appended after the payload if present
+The `mon_bin_hdr` is populated by mapping USB/IP protocol fields as described in the link type table above. This allows Wireshark to fully decode the USB traffic natively.
 
 ### Snap Length
 
@@ -205,7 +209,7 @@ typedef struct {
 Each entry in the ring buffer is framed as:
 
 ```
-[4 bytes: entry_len] [16 bytes: pcap_record_hdr] [4 bytes: direction] [hdr_len bytes] [payload_len bytes]
+[4 bytes: entry_len] [16 bytes: pcap_record_hdr] [64 bytes: mon_bin_hdr] [N bytes: payload]
 ```
 
 The `entry_len` field allows the writer task to read complete entries without parsing PCAP headers.
@@ -521,7 +525,7 @@ Modified files:
 
 1. **Card-detect GPIO:** The requirements specify pin assignments for the SDIO data bus but not a card-detect (CD) pin. If a CD pin is available, hot-insertion could be supported with a GPIO interrupt. Without it, card presence is only checked at init/start time.
 
-2. **Wireshark dissector:** To make the .pcap files immediately useful in Wireshark, a Lua dissector for DLT_USER0 could be provided as a companion file. This is out of scope for the firmware but would be a valuable addition. Alternatively, the capture format could be changed to use LINKTYPE_RAW (101) and wrap the USB/IP data in a minimal IP/TCP pseudo-header so Wireshark's built-in USB/IP dissector can decode it -- but this adds complexity and the pseudo-headers would be misleading.
+2. **Wireshark dissector:** Resolved -- using LINKTYPE_USB_LINUX_MMAPPED (220) which Wireshark decodes natively as USB traffic. No custom dissector needed.
 
 3. **Multi-device capture:** The current design captures all USB/IP traffic on the single server socket. If multiple devices are exported simultaneously (multiple `transfer_engine_run` instances), each instance's hooks independently submit packets to the same ring buffer. The `devid` field in the USB/IP header distinguishes devices within the capture file. No changes needed for this to work.
 
