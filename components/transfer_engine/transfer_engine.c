@@ -244,12 +244,23 @@ static void free_pending_slot(pending_urb_t *slot)
  * @brief Send RET_SUBMIT for a completed pending URB.
  * @return 0 on success, -1 on socket error
  */
-static int send_completed_reply(int fd, pending_urb_t *slot)
+static int send_completed_reply(int fd, pending_urb_t *slot, usb_device_handle_t dev_handle)
 {
     int32_t reply_status = map_usb_status(slot->usb_status);
     int32_t actual_length = 0;
     int32_t reply_num_packets = 0;
     int32_t reply_error_count = 0;
+
+    /* After a STALL, ESP-IDF puts the endpoint pipe into halted state.
+     * We must clear it so subsequent transfers can be submitted.
+     * This mirrors Linux kernel behavior: usb_clear_halt(). */
+    if (slot->usb_status == USB_TRANSFER_STATUS_STALL && !slot->is_control && dev_handle) {
+        uint8_t ep_addr = slot->xfer->bEndpointAddress;
+        usb_host_endpoint_halt(dev_handle, ep_addr);
+        usb_host_endpoint_flush(dev_handle, ep_addr);
+        usb_host_endpoint_clear(dev_handle, ep_addr);
+        ESP_LOGD(TAG, "Cleared STALL on ep 0x%02x", ep_addr);
+    }
 
     if (reply_status == 0) {
         actual_length = slot->xfer->actual_num_bytes;
@@ -403,7 +414,13 @@ static int handle_cmd_submit(int fd, usbip_header_t *hdr, const dm_device_info_t
     bool is_control = (ep == 0);
 
     /* Compute allocation size */
+    /* For non-control IN transfers, ESP-IDF requires num_bytes to be a multiple
+     * of the endpoint's max packet size (MPS). HS bulk MPS = 512, FS bulk = 64.
+     * Round up allocation to accommodate this. We use 512 as safe MPS upper bound. */
     size_t alloc_size = is_control ? (size_t)(buflen + 8) : (size_t)buflen;
+    if (!is_control && direction == USBIP_DIR_IN && alloc_size > 0) {
+        alloc_size = (alloc_size + 511) & ~511u;  /* Round up to 512-byte MPS */
+    }
     if (alloc_size < MIN_TRANSFER_SIZE) {
         alloc_size = MIN_TRANSFER_SIZE;
     }
@@ -481,7 +498,12 @@ static int handle_cmd_submit(int fd, usbip_header_t *hdr, const dm_device_info_t
         xfer->num_bytes = buflen + 8;
         xfer->bEndpointAddress = 0;
     } else {
-        xfer->num_bytes = buflen;
+        /* For IN transfers, round up to MPS multiple as required by ESP-IDF */
+        if (direction == USBIP_DIR_IN && buflen > 0) {
+            xfer->num_bytes = (buflen + 511) & ~511u;
+        } else {
+            xfer->num_bytes = buflen;
+        }
         xfer->bEndpointAddress = (uint8_t)(ep | (direction == USBIP_DIR_IN ? 0x80 : 0x00));
     }
 
@@ -739,7 +761,7 @@ int transfer_engine_run(int sockfd, const char *busid)
 
             if (xSemaphoreTake(slot->sem, 0) == pdTRUE) {
                 /* Transfer completed! */
-                if (send_completed_reply(sockfd, slot) != 0) {
+                if (send_completed_reply(sockfd, slot, cached_dev_handle) != 0) {
                     free_pending_slot(slot);
                     ret = -1;
                     goto cleanup;

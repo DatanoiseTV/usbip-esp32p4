@@ -229,8 +229,18 @@ static int handle_import(int fd, uint16_t client_version, uint32_t client_ip)
     ESP_LOGI(TAG, "Device '%s' imported successfully, entering transfer loop", req.busid);
     event_log_add(EVENT_LOG_LEVEL_INFO, "Device %s imported", req.busid);
 
-    /* Claim all interfaces before non-control transfers */
-    usb_host_mgr_claim_interfaces(info.dev_addr);
+    /* Safety: release any stale interface claims from a previous session,
+     * then claim all interfaces for this session */
+    usb_host_mgr_release_interfaces(info.dev_addr);
+    esp_err_t claim_err = usb_host_mgr_claim_interfaces(info.dev_addr);
+    if (claim_err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to claim interfaces for '%s': %s", req.busid, esp_err_to_name(claim_err));
+        device_manager_release(dev_index);
+        usbip_op_common_t err_hdr = { .version = client_version, .code = OP_REP_IMPORT, .status = ST_NA };
+        usbip_pack_op_common(&err_hdr, true);
+        usbip_net_send(fd, &err_hdr, sizeof(err_hdr));
+        return 0;
+    }
 
     /* Enter the URB transfer loop (blocks until done) */
     transfer_engine_run(fd, req.busid);
