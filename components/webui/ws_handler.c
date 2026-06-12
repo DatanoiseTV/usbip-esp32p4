@@ -11,6 +11,7 @@
 #include "freertos/portmacro.h"
 #include "device_manager.h"
 #include "event_log.h"
+#include "webui_internal.h"
 
 #include <string.h>
 #include <stdio.h>
@@ -89,23 +90,8 @@ static int build_devices_json(char *buf, int buflen)
         /* Escape manufacturer and product strings for JSON safety */
         char mfr_esc[128];
         char prod_esc[128];
-        int ep;
-
-        ep = 0;
-        for (int j = 0; info.manufacturer[j] && ep < (int)sizeof(mfr_esc) - 2; j++) {
-            char c = info.manufacturer[j];
-            if (c == '"' || c == '\\') mfr_esc[ep++] = '\\';
-            mfr_esc[ep++] = c;
-        }
-        mfr_esc[ep] = '\0';
-
-        ep = 0;
-        for (int j = 0; info.product[j] && ep < (int)sizeof(prod_esc) - 2; j++) {
-            char c = info.product[j];
-            if (c == '"' || c == '\\') prod_esc[ep++] = '\\';
-            prod_esc[ep++] = c;
-        }
-        prod_esc[ep] = '\0';
+        webui_json_escape(info.manufacturer, mfr_esc, sizeof(mfr_esc));
+        webui_json_escape(info.product, prod_esc, sizeof(prod_esc));
 
         pos += snprintf(buf + pos, buflen - pos,
             "{\"idx\":%d,\"path\":\"%s\",\"vid\":%u,\"pid\":%u,\"speed\":%d,"
@@ -161,22 +147,8 @@ static int build_logs_json(char *buf, int buflen)
     pos += snprintf(buf + pos, buflen - pos, "[");
     for (size_t i = 0; i < count; i++) {
         if (i > 0) pos += snprintf(buf + pos, buflen - pos, ",");
-        /* Escape any quotes in message */
         char escaped[EVENT_LOG_MSG_MAX_LEN * 2];
-        int ep = 0;
-        for (int j = 0; entries[i].message[j] && ep < (int)sizeof(escaped) - 2; j++) {
-            char c = entries[i].message[j];
-            if (c == '"' || c == '\\') {
-                escaped[ep++] = '\\';
-            }
-            if (c == '\n') {
-                escaped[ep++] = '\\';
-                escaped[ep++] = 'n';
-                continue;
-            }
-            escaped[ep++] = c;
-        }
-        escaped[ep] = '\0';
+        webui_json_escape(entries[i].message, escaped, sizeof(escaped));
 
         pos += snprintf(buf + pos, buflen - pos,
             "{\"ts\":%lld,\"level\":%d,\"msg\":\"%s\"}",

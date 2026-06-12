@@ -187,6 +187,9 @@
         if (name === 'settings') {
             loadAllSettings();
         }
+        if (name === 'devices' && lastStats) {
+            updateDeviceList(lastStats.devices || []);
+        }
         if (name === 'topology' && lastStats) {
             buildTopology(lastStats.devices || []);
         }
@@ -266,7 +269,7 @@
                     handleStats(msg);
                 }
             } catch (e) {
-                /* ignore malformed messages */
+                console.error('WS message handling error:', e);
             }
         };
     }
@@ -503,6 +506,10 @@
             $deviceList.innerHTML = '<div class="empty-state">No USB devices connected</div>';
             return;
         }
+
+        /* Remove stale empty-state placeholder before reconciling cards */
+        var emptyState = $deviceList.querySelector('.empty-state');
+        if (emptyState) emptyState.parentNode.removeChild(emptyState);
 
         /* Build or update device cards - reconcile existing DOM */
         var existingCards = $deviceList.querySelectorAll('.device-card');

@@ -4,6 +4,7 @@
  */
 
 #include "webui.h"
+#include "webui_internal.h"
 #include "esp_log.h"
 #include "esp_http_server.h"
 #include "esp_system.h"
@@ -103,19 +104,6 @@ static bool json_get_bool(const char *json, const char *key, bool *out)
     return false;
 }
 
-static void json_escape(const char *src, char *dst, int dstlen)
-{
-    int j = 0;
-    for (int i = 0; src[i] && j < dstlen - 2; i++) {
-        char c = src[i];
-        if (c == '"' || c == '\\') dst[j++] = '\\';
-        if (c == '\n') { dst[j++] = '\\'; dst[j++] = 'n'; continue; }
-        if (c == '\r') { dst[j++] = '\\'; dst[j++] = 'r'; continue; }
-        dst[j++] = c;
-    }
-    dst[j] = '\0';
-}
-
 static const char *speed_str(device_speed_t s)
 {
     switch (s) {
@@ -158,9 +146,9 @@ static esp_err_t handle_api_device_detail(httpd_req_t *req)
     int buflen = 4096;
 
     char mfg_esc[128], prod_esc[128], ser_esc[128];
-    json_escape(info.manufacturer, mfg_esc, sizeof(mfg_esc));
-    json_escape(info.product, prod_esc, sizeof(prod_esc));
-    json_escape(info.serial, ser_esc, sizeof(ser_esc));
+    webui_json_escape(info.manufacturer, mfg_esc, sizeof(mfg_esc));
+    webui_json_escape(info.product, prod_esc, sizeof(prod_esc));
+    webui_json_escape(info.serial, ser_esc, sizeof(ser_esc));
 
     /* Client IP as dotted string */
     char client_ip_str[20] = "";
@@ -397,7 +385,7 @@ static esp_err_t handle_api_settings_auth_get(httpd_req_t *req)
     const char *username = webui_auth_username();
 
     char esc_user[128];
-    json_escape(username ? username : "", esc_user, sizeof(esc_user));
+    webui_json_escape(username ? username : "", esc_user, sizeof(esc_user));
 
     char buf[256];
     int n = snprintf(buf, sizeof(buf),
