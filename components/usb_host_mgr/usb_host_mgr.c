@@ -146,36 +146,50 @@ static void copy_string_descriptor(const usb_str_desc_t *str_desc,
 
 /* ---- Device enumeration on NEW_DEV ---- */
 
-/* Build a stable usbip busid "1-<port>[.<port>...]" from physical port numbers,
- * walking the parent-hub chain up to the root. Port numbers are stable across
- * re-enumeration (the USB device address is not), so the same physical port
- * always maps to the same busid and client auto-reattach survives a replug.
- * The ESP32-P4 has a single OTG root port, so a root-attached device is "1-1". */
-static void build_busid_path(const usb_device_info_t *info, char *out, size_t out_len)
+/* Build a usbip busid for a device.
+ *
+ * Preferred form is a stable topology path "1-1.<hub port>[.<...>]" built from
+ * physical port numbers by walking the parent-hub chain -- stable across
+ * re-enumeration so client auto-reattach survives a replug.
+ *
+ * BUT ESP-IDF does not populate parent/hub topology for devices behind an
+ * EXTERNAL hub (parent.dev_hdl == NULL), and root devices have no parent
+ * either. Without topology a port path would collapse EVERY device to "1-1" --
+ * which is a hard bug with a hub (colliding busid => the device is unreachable).
+ * So when no topology is available we fall back to the device address to
+ * guarantee UNIQUE busids. Cost: an address-based busid churns across
+ * re-enumeration. Correctness (uniqueness) must win over stability here. */
+static void build_busid_path(const usb_device_info_t *info, uint8_t dev_addr,
+                             char *out, size_t out_len)
 {
     uint8_t ports[8];
     int depth = 0;
+    bool have_topology = false;
     usb_device_info_t cur = *info;
 
     while (depth < (int)sizeof(ports)) {
         if (cur.parent.dev_hdl == NULL) {
-            ports[depth++] = 1;                 /* single OTG root port */
-            break;
+            break;                              /* reached root / no parent info */
         }
         ports[depth++] = cur.parent.port_num;   /* this node's port on its parent hub */
+        have_topology = true;
         if (usb_host_device_info(cur.parent.dev_hdl, &cur) != ESP_OK) {
-            break;                              /* can't walk further; treat as root */
+            break;                              /* can't walk further */
         }
     }
 
-    /* ports[] is leaf-first; emit root-first: "1-<root>[.<...>.<leaf>]". */
-    int n = snprintf(out, out_len, "1");
+    if (!have_topology) {
+        snprintf(out, out_len, "1-%u", dev_addr);   /* unique, not stable */
+        return;
+    }
+
+    /* Topology available: emit root-first "1-1.<hub port>[.<...>.<leaf>]". */
+    int n = snprintf(out, out_len, "1-1");
     for (int i = depth - 1; i >= 0; i--) {
         if (n < 0 || (size_t)n >= out_len) {
             break;
         }
-        n += snprintf(out + n, out_len - n, "%c%d",
-                      (i == depth - 1) ? '-' : '.', ports[i]);
+        n += snprintf(out + n, out_len - n, ".%u", ports[i]);
     }
 }
 
@@ -252,7 +266,7 @@ static void handle_new_device(uint8_t dev_addr)
     dm_info.bus_id = 1;
     dm_info.dev_addr = dev_addr;
     dm_info.speed = map_speed(dev_info.speed);
-    build_busid_path(&dev_info, dm_info.path, sizeof(dm_info.path));
+    build_busid_path(&dev_info, dev_addr, dm_info.path, sizeof(dm_info.path));
     if (dev_info.parent.dev_hdl != NULL) {
         ESP_LOGI(TAG, "  Device is behind hub (parent port=%d), busid=%s",
                  dev_info.parent.port_num, dm_info.path);
