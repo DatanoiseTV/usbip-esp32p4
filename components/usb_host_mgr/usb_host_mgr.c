@@ -352,8 +352,20 @@ static void handle_device_gone(usb_device_handle_t dev_hdl)
         device_manager_remove(fctx.found_idx);
     }
 
+    /* Release any interfaces claimed by an active import BEFORE closing.
+     * usb_host_device_close() returns ESP_ERR_INVALID_STATE if this client
+     * still has interfaces claimed on the device, which leaves the device
+     * un-freed and the root port stuck -> the next plug never generates a
+     * NEW_DEV event (hot-plug re-enumeration silently dies). The normal
+     * session-end path releases interfaces too; this path must match it. */
+    usb_host_mgr_release_interfaces(dev_addr);
+
     /* Close the USB device */
-    usb_host_device_close(s_client_hdl, dev_hdl);
+    esp_err_t close_err = usb_host_device_close(s_client_hdl, dev_hdl);
+    if (close_err != ESP_OK) {
+        ESP_LOGE(TAG, "usb_host_device_close(addr=%d) failed: %s",
+                 dev_addr, esp_err_to_name(close_err));
+    }
     tracked_remove(idx);
 
     /* Cross-component notifications */
