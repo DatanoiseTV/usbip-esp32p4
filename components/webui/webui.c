@@ -11,7 +11,7 @@
 #include "event_log.h"
 #include "access_control.h"
 #include "network_mgr.h"
-#include "mbedtls/sha256.h"
+#include "psa/crypto.h"
 #include "nvs_flash.h"
 #include "nvs.h"
 #include "mbedtls/base64.h"
@@ -48,12 +48,22 @@ static void auth_load_from_nvs(void)
     nvs_close(nvs);
 }
 
+/* SHA-256 via the PSA API. mbedTLS 4.x (IDF 6.0) moved mbedtls_sha256() to a
+ * private header; psa_hash_compute() is the supported replacement. */
+static void sha256_compute(const uint8_t *input, size_t len, uint8_t out[32])
+{
+    static bool psa_inited = false;
+    if (!psa_inited) { psa_crypto_init(); psa_inited = true; }
+    size_t olen = 0;
+    psa_hash_compute(PSA_ALG_SHA_256, input, len, out, 32, &olen);
+}
+
 void webui_auth_save(bool enabled, const char *username, const char *password)
 {
     s_auth_enabled = enabled;
     if (username) strncpy(s_auth_username, username, AUTH_MAX_USERNAME - 1);
     if (password) {
-        mbedtls_sha256((const uint8_t *)password, strlen(password), s_auth_password_hash, 0);
+        sha256_compute((const uint8_t *)password, strlen(password), s_auth_password_hash);
     }
     nvs_handle_t nvs;
     if (nvs_open(AUTH_NVS_NAMESPACE, NVS_READWRITE, &nvs) != ESP_OK) return;
@@ -106,7 +116,7 @@ static bool auth_check_request(httpd_req_t *req)
 
     /* Check password hash */
     uint8_t hash[32];
-    mbedtls_sha256((const uint8_t *)pass, strlen(pass), hash, 0);
+    sha256_compute((const uint8_t *)pass, strlen(pass), hash);
     return memcmp(hash, s_auth_password_hash, 32) == 0;
 }
 

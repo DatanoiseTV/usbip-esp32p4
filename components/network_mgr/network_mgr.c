@@ -11,6 +11,7 @@
 #include "esp_eth.h"
 #include "esp_eth_mac.h"
 #include "esp_eth_phy.h"
+#include "esp_eth_phy_ip101.h"  /* esp_eth_phy_new_ip101 moved to espressif/ip101 in IDF 6.0 */
 #include "esp_eth_netif_glue.h"
 #include "esp_eth_mac_esp.h"
 #include "esp_netif.h"
