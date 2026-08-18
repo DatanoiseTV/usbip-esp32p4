@@ -146,6 +146,39 @@ static void copy_string_descriptor(const usb_str_desc_t *str_desc,
 
 /* ---- Device enumeration on NEW_DEV ---- */
 
+/* Build a stable usbip busid "1-<port>[.<port>...]" from physical port numbers,
+ * walking the parent-hub chain up to the root. Port numbers are stable across
+ * re-enumeration (the USB device address is not), so the same physical port
+ * always maps to the same busid and client auto-reattach survives a replug.
+ * The ESP32-P4 has a single OTG root port, so a root-attached device is "1-1". */
+static void build_busid_path(const usb_device_info_t *info, char *out, size_t out_len)
+{
+    uint8_t ports[8];
+    int depth = 0;
+    usb_device_info_t cur = *info;
+
+    while (depth < (int)sizeof(ports)) {
+        if (cur.parent.dev_hdl == NULL) {
+            ports[depth++] = 1;                 /* single OTG root port */
+            break;
+        }
+        ports[depth++] = cur.parent.port_num;   /* this node's port on its parent hub */
+        if (usb_host_device_info(cur.parent.dev_hdl, &cur) != ESP_OK) {
+            break;                              /* can't walk further; treat as root */
+        }
+    }
+
+    /* ports[] is leaf-first; emit root-first: "1-<root>[.<...>.<leaf>]". */
+    int n = snprintf(out, out_len, "1");
+    for (int i = depth - 1; i >= 0; i--) {
+        if (n < 0 || (size_t)n >= out_len) {
+            break;
+        }
+        n += snprintf(out + n, out_len - n, "%c%d",
+                      (i == depth - 1) ? '-' : '.', ports[i]);
+    }
+}
+
 static void handle_new_device(uint8_t dev_addr)
 {
     usb_device_handle_t dev_hdl = NULL;
@@ -210,36 +243,19 @@ static void handle_new_device(uint8_t dev_addr)
         return;
     }
 
-    /* 6. Build busid path and populate dm_device_info_t.
-     *    If the device has a parent (behind a hub), the path encodes topology:
-     *    "1-{port}" for root-port devices, "1-{parent_port}.{port}" for hub children.
-     *    When parent info isn't actionable, fall back to "1-{dev_addr}". */
+    /* 6. Build a stable, topology-based busid and populate dm_device_info_t.
+     *    The path is built from physical port numbers (root port + hub ports),
+     *    which don't change across re-enumeration -- unlike the USB device
+     *    address -- so replugging the same device into the same port yields the
+     *    same busid and client auto-reattach keeps working. */
     dm_device_info_t dm_info = {0};
     dm_info.bus_id = 1;
     dm_info.dev_addr = dev_addr;
     dm_info.speed = map_speed(dev_info.speed);
-
-    if (dev_info.parent.dev_hdl != NULL && dev_info.parent.port_num != 0) {
-        /* Device is behind a hub.  Try to resolve the parent's address
-         * so we can build a proper topology path. */
-        usb_device_info_t parent_info;
-        esp_err_t perr = usb_host_device_info(dev_info.parent.dev_hdl, &parent_info);
-        if (perr == ESP_OK && parent_info.parent.dev_hdl == NULL) {
-            /* Parent is directly on the root port */
-            snprintf(dm_info.path, sizeof(dm_info.path), "1-%d.%d",
-                     parent_info.dev_addr, dev_info.parent.port_num);
-        } else if (perr == ESP_OK) {
-            /* Parent itself is behind another hub -- just use parent addr */
-            snprintf(dm_info.path, sizeof(dm_info.path), "1-%d.%d",
-                     parent_info.dev_addr, dev_info.parent.port_num);
-        } else {
-            /* Can't query parent, fall back */
-            snprintf(dm_info.path, sizeof(dm_info.path), "1-%d", dev_addr);
-        }
-        ESP_LOGI(TAG, "  Device is behind hub (parent port=%d), path=%s",
+    build_busid_path(&dev_info, dm_info.path, sizeof(dm_info.path));
+    if (dev_info.parent.dev_hdl != NULL) {
+        ESP_LOGI(TAG, "  Device is behind hub (parent port=%d), busid=%s",
                  dev_info.parent.port_num, dm_info.path);
-    } else {
-        snprintf(dm_info.path, sizeof(dm_info.path), "1-%d", dev_addr);
     }
 
     /* Fill descriptor fields */
