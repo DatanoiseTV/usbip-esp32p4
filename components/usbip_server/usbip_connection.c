@@ -174,8 +174,9 @@ static int handle_import(int fd, uint16_t client_version, uint32_t client_ip)
         return 0; /* Not fatal - client can retry or send another op */
     }
 
-    /* Try to import (claim) the device */
-    err = device_manager_import(dev_index, client_ip);
+    /* Try to import (claim) the device. The connection fd is the ownership key
+     * so only this exact connection can release it on disconnect. */
+    err = device_manager_import(dev_index, client_ip, fd);
     if (err != ESP_OK) {
         ESP_LOGW(TAG, "Failed to import device '%s': %s", req.busid, esp_err_to_name(err));
 
@@ -317,7 +318,7 @@ void usbip_connection_handle(void *arg)
 
 done:
     /* Safety: release any devices this client may have imported */
-    device_manager_release_by_ip(client_ip);
+    device_manager_release_by_owner(fd);
     close(fd);
     ESP_LOGI(TAG, "Connection handler exiting for %s (fd=%d)", ip_str, fd);
     event_log_add(EVENT_LOG_LEVEL_INFO, "Client disconnected: %s", ip_str);
