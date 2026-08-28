@@ -232,7 +232,7 @@ Host-side test utilities in `tools/`:
 - **Ethernet only** - no WiFi transport (by design, for reliability and latency)
 - **No Transaction Translator** - FS/LS devices only work when connected directly to the root port, not through HS hubs (ESP-IDF limitation)
 - **~16 USB host channels** - each claimed endpoint uses one; a quad device (FT4232H = 8) means ~1 fully-active quad device before `No more HCD channels`
-- **busids renumber** - hub devices are keyed by USB address (ESP-IDF exposes no hub topology), so they can change across re-enumeration; `list` before attaching
+- **busids** - physical-port based (`1-1` root, `1-1.<hub port>` behind a hub), stable across re-enumeration. Chained (multi-level) hubs can't be disambiguated - ESP-IDF exposes no parent handle, so devices on the same port number of different hubs would collide; a single hub is fine
 - **100 Mbps Ethernet** - throughput limited by network, not USB bus speed (see Performance section)
 - **ESP-IDF USB host stack** - some devices with multiple configurations may have enumeration issues
 
