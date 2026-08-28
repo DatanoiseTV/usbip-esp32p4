@@ -19,6 +19,7 @@
 static const char *TAG = "ws_handler";
 
 #define WS_MAX_CLIENTS 2
+#define WS_CLIENT_LIST_MAX 8   /* >= httpd max_open_sockets, for client enumeration */
 
 /* Internal state */
 static int ws_fds[WS_MAX_CLIENTS];
@@ -184,8 +185,7 @@ static void ws_async_send_cb(void *arg)
     };
     esp_err_t ret = httpd_ws_send_frame_async(ws_server_handle, ctx->fd, &frame);
     if (ret != ESP_OK) {
-        ESP_LOGW(TAG, "WS send failed fd=%d: %s, unregistering", ctx->fd, esp_err_to_name(ret));
-        ws_unregister_fd(ctx->fd);
+        ESP_LOGW(TAG, "WS send failed fd=%d: %s", ctx->fd, esp_err_to_name(ret));
     }
     free(ctx->payload);
     free(ctx);
@@ -193,16 +193,25 @@ static void ws_async_send_cb(void *arg)
 
 void ws_broadcast_stats(void)
 {
-    /* Snapshot fds under lock */
-    int fds[WS_MAX_CLIENTS];
-    portENTER_CRITICAL(&ws_fds_lock);
-    bool has_clients = false;
-    for (int i = 0; i < WS_MAX_CLIENTS; i++) {
-        fds[i] = ws_fds[i];
-        if (fds[i] >= 0) has_clients = true;
+    if (!ws_server_handle) return;
+
+    /* Ask httpd who is connected and keep the WebSocket clients. ESP-IDF 6.0
+     * does not call the URI handler on the WS handshake (httpd_uri.c: "do not
+     * call the uri->handler"), so a handshake-time fd registry is never filled
+     * -- enumerate the live client list at send time instead. */
+    int client_fds[WS_CLIENT_LIST_MAX];
+    size_t fds_count = WS_CLIENT_LIST_MAX;
+    if (httpd_get_client_list(ws_server_handle, &fds_count, client_fds) != ESP_OK) {
+        return;
     }
-    portEXIT_CRITICAL(&ws_fds_lock);
-    if (!has_clients) return;
+    int ws_fds_list[WS_CLIENT_LIST_MAX];
+    int ws_count = 0;
+    for (size_t i = 0; i < fds_count; i++) {
+        if (httpd_ws_get_fd_info(ws_server_handle, client_fds[i]) == HTTPD_WS_CLIENT_WEBSOCKET) {
+            ws_fds_list[ws_count++] = client_fds[i];
+        }
+    }
+    if (ws_count == 0) return;
 
     /* Build the stats JSON message on the stack */
     char *json_buf = malloc(8192);
@@ -231,8 +240,7 @@ void ws_broadcast_stats(void)
     pos += snprintf(json_buf + pos, buflen - pos, "}");
 
     /* Queue the send onto the httpd task for each client (own payload copy each). */
-    for (int i = 0; i < WS_MAX_CLIENTS; i++) {
-        if (fds[i] < 0) continue;
+    for (int i = 0; i < ws_count; i++) {
         struct ws_async_send_ctx *ctx = malloc(sizeof(*ctx));
         char *copy = malloc(pos);
         if (!ctx || !copy) {
@@ -241,7 +249,7 @@ void ws_broadcast_stats(void)
             continue;
         }
         memcpy(copy, json_buf, pos);
-        ctx->fd = fds[i];
+        ctx->fd = ws_fds_list[i];
         ctx->len = pos;
         ctx->payload = copy;
         if (httpd_queue_work(ws_server_handle, ws_async_send_cb, ctx) != ESP_OK) {
