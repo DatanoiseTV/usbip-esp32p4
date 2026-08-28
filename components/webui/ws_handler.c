@@ -8,7 +8,6 @@
 #include "esp_system.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
-#include "freertos/portmacro.h"
 #include "device_manager.h"
 #include "event_log.h"
 #include "webui_internal.h"
@@ -18,56 +17,14 @@
 
 static const char *TAG = "ws_handler";
 
-#define WS_MAX_CLIENTS 2
 #define WS_CLIENT_LIST_MAX 8   /* >= httpd max_open_sockets, for client enumeration */
 
-/* Internal state */
-static int ws_fds[WS_MAX_CLIENTS];
 static httpd_handle_t ws_server_handle;
-static portMUX_TYPE ws_fds_lock = portMUX_INITIALIZER_UNLOCKED;
 
 void ws_handler_init(httpd_handle_t server)
 {
     ws_server_handle = server;
-    for (int i = 0; i < WS_MAX_CLIENTS; i++) {
-        ws_fds[i] = -1;
-    }
-    ESP_LOGI(TAG, "WebSocket handler initialized (max_clients=%d)", WS_MAX_CLIENTS);
-}
-
-static void ws_register_fd(int fd)
-{
-    portENTER_CRITICAL(&ws_fds_lock);
-    for (int i = 0; i < WS_MAX_CLIENTS; i++) {
-        if (ws_fds[i] == fd) {
-            portEXIT_CRITICAL(&ws_fds_lock);
-            return; /* already registered */
-        }
-    }
-    for (int i = 0; i < WS_MAX_CLIENTS; i++) {
-        if (ws_fds[i] < 0) {
-            ws_fds[i] = fd;
-            portEXIT_CRITICAL(&ws_fds_lock);
-            ESP_LOGI(TAG, "WS client registered fd=%d slot=%d", fd, i);
-            return;
-        }
-    }
-    portEXIT_CRITICAL(&ws_fds_lock);
-    ESP_LOGW(TAG, "WS client slots full, rejecting fd=%d", fd);
-}
-
-static void ws_unregister_fd(int fd)
-{
-    portENTER_CRITICAL(&ws_fds_lock);
-    for (int i = 0; i < WS_MAX_CLIENTS; i++) {
-        if (ws_fds[i] == fd) {
-            ws_fds[i] = -1;
-            portEXIT_CRITICAL(&ws_fds_lock);
-            ESP_LOGI(TAG, "WS client unregistered fd=%d slot=%d", fd, i);
-            return;
-        }
-    }
-    portEXIT_CRITICAL(&ws_fds_lock);
+    ESP_LOGI(TAG, "WebSocket handler initialized");
 }
 
 /* Build device JSON fragment into buf. Returns chars written. */
@@ -261,57 +218,12 @@ void ws_broadcast_stats(void)
     free(json_buf);
 }
 
-/* Handle incoming WS messages */
-static void handle_ws_message(const char *data, int len)
-{
-    /* Simple JSON parse: look for "action" and "busid" */
-    const char *act = strstr(data, "\"action\"");
-    if (!act) return;
-
-    if (strstr(act, "\"toggle_export\"")) {
-        const char *busid_key = strstr(data, "\"busid\"");
-        if (!busid_key) return;
-        /* Find the value */
-        const char *colon = strchr(busid_key + 7, ':');
-        if (!colon) return;
-        const char *quote1 = strchr(colon, '"');
-        if (!quote1) return;
-        quote1++;
-        const char *quote2 = strchr(quote1, '"');
-        if (!quote2 || quote2 - quote1 >= 32) return;
-
-        char busid[32];
-        int blen = (int)(quote2 - quote1);
-        memcpy(busid, quote1, blen);
-        busid[blen] = '\0';
-
-        int idx;
-        if (device_manager_lookup(busid, &idx) == ESP_OK) {
-            dm_device_info_t info;
-            if (device_manager_get(idx, &info) == ESP_OK) {
-                if (info.state == DEV_STATE_EXPORTED) {
-                    device_manager_release(idx);
-                    ESP_LOGI(TAG, "Released device %s via WS", busid);
-                }
-                /* Note: actual export requires a USBIP client connection,
-                   so we can only release from the web UI */
-            }
-        }
-    }
-}
-
-/* WebSocket handler called by esp_http_server */
+/* WebSocket handler called by esp_http_server. On ESP-IDF 6.0 the handshake is
+ * handled internally, so this is invoked only for incoming frames. The frontend
+ * drives all device actions over the REST API and never sends WS frames, so any
+ * frame received here is simply drained. */
 esp_err_t ws_handler(httpd_req_t *req)
 {
-    if (req->method == HTTP_GET) {
-        /* This is the initial WS handshake GET - register client for broadcasts */
-        int fd = httpd_req_to_sockfd(req);
-        ESP_LOGI(TAG, "WS handshake from fd=%d", fd);
-        ws_register_fd(fd);
-        return ESP_OK;
-    }
-
-    /* Receive the WS frame */
     httpd_ws_frame_t frame;
     memset(&frame, 0, sizeof(frame));
     frame.type = HTTPD_WS_TYPE_TEXT;
@@ -321,7 +233,6 @@ esp_err_t ws_handler(httpd_req_t *req)
         ESP_LOGE(TAG, "httpd_ws_recv_frame length failed: %s", esp_err_to_name(ret));
         return ret;
     }
-
     if (frame.len == 0) {
         return ESP_OK;
     }
@@ -339,18 +250,6 @@ esp_err_t ws_handler(httpd_req_t *req)
         return ret;
     }
 
-    int fd = httpd_req_to_sockfd(req);
-    ws_register_fd(fd);
-
-    if (frame.type == HTTPD_WS_TYPE_TEXT) {
-        handle_ws_message((char *)buf, frame.len);
-    }
-
     free(buf);
     return ESP_OK;
-}
-
-void ws_on_close(int fd)
-{
-    ws_unregister_fd(fd);
 }

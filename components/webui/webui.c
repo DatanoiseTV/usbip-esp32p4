@@ -151,7 +151,6 @@ extern const uint8_t app_js_end[]   asm("_binary_app_js_end");
 extern void ws_handler_init(httpd_handle_t server);
 extern esp_err_t ws_handler(httpd_req_t *req);
 extern void ws_broadcast_stats(void);
-extern void ws_on_close(int fd);
 
 static httpd_handle_t s_server = NULL;
 static esp_timer_handle_t s_stats_timer = NULL;
@@ -320,14 +319,6 @@ static esp_err_t handle_ws(httpd_req_t *req)
     return ws_handler(req);
 }
 
-/* ---- Socket close hook ---- */
-
-static void on_sock_close(httpd_handle_t hd, int sockfd)
-{
-    ws_on_close(sockfd);
-    close(sockfd);
-}
-
 /* ---- Stats broadcast timer callback ---- */
 
 static void stats_timer_cb(void *arg)
@@ -351,7 +342,6 @@ esp_err_t webui_init(void)
     config.lru_purge_enable = true;   /* reclaim the oldest socket instead of refusing new connections when full */
     config.recv_wait_timeout = 10;    /* seconds; don't let a stalled peer pin a slot indefinitely */
     config.send_wait_timeout = 10;
-    config.close_fn = on_sock_close;
 
     esp_err_t ret = httpd_start(&s_server, &config);
     if (ret != ESP_OK) {

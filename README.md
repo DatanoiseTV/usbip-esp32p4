@@ -71,8 +71,6 @@ usbip attach -r 192.168.1.24 -b 1-1
 
 ### Web Dashboard
 
-> On ESP-IDF 6.0 the Web UI HTTP/API layer is currently non-functional; use the serial monitor.
-
 Open `http://192.168.1.24/` in a browser for the real-time monitoring dashboard.
 
 The dashboard shows:
