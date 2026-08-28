@@ -55,7 +55,8 @@ typedef struct {
     uint8_t  num_interfaces;     /**< Number of interfaces in active config */
     device_speed_t speed;        /**< Device speed */
     device_state_t state;        /**< Current state */
-    uint32_t client_ip;          /**< IP of importing client (if exported) */
+    uint32_t client_ip;          /**< IP of importing client (if exported), for display */
+    int      owner_fd;           /**< fd of the owning connection (ownership key), -1 if none */
     char     path[32];           /**< Bus ID string e.g. "1-1" */
     dm_interface_info_t interfaces[DEVICE_MANAGER_MAX_INTERFACES]; /**< Interface descriptors */
 
@@ -116,10 +117,11 @@ esp_err_t device_manager_get(int index, dm_device_info_t *out_info);
 /**
  * @brief Import (claim) a device for a client
  * @param index Device index
- * @param client_ip Client IP address
+ * @param client_ip Client IP address (for display/logging)
+ * @param owner_fd fd of the owning connection (ownership key for release)
  * @return ESP_OK on success
  */
-esp_err_t device_manager_import(int index, uint32_t client_ip);
+esp_err_t device_manager_import(int index, uint32_t client_ip, int owner_fd);
 
 /**
  * @brief Release an exported device
@@ -129,10 +131,12 @@ esp_err_t device_manager_import(int index, uint32_t client_ip);
 esp_err_t device_manager_release(int index);
 
 /**
- * @brief Release all devices exported to a specific client IP (safety cleanup)
- * @param client_ip Client IP address
+ * @brief Release any device owned by a specific connection (safety cleanup on
+ *        disconnect). Keyed on the owning fd, not the client IP, so a second
+ *        connection from the same host cannot release another connection's device.
+ * @param owner_fd fd of the disconnecting connection
  */
-void device_manager_release_by_ip(uint32_t client_ip);
+void device_manager_release_by_owner(int owner_fd);
 
 /**
  * @brief Get the count of currently registered devices

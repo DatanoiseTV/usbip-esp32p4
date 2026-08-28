@@ -8,6 +8,7 @@ A standalone USB/IP server running on the ESP32-P4-Nano that exports locally-con
 - **USB 2.0 High-Speed** (480 Mbps) with all transfer types: control, bulk, interrupt, isochronous
 - **Hub support** for multiple simultaneous devices
 - **100 Mbps Ethernet** with IEEE 802.3x flow control and tuned lwIP stack
+- **Link-local (AUTOIP)** - reachable at 169.254.x.x on a direct cable with no DHCP
 - **mDNS discovery** (`_usbip._tcp`) - auto-discoverable on the network
 - **Real-time Web UI** dashboard with device tree, bandwidth monitoring, and event log
 - **Access control** with open/closed mode and IP allowlist (persisted in NVS)
@@ -27,7 +28,7 @@ A standalone USB/IP server running on the ESP32-P4-Nano that exports locally-con
 
 ### Prerequisites
 
-- [ESP-IDF v5.5](https://docs.espressif.com/projects/esp-idf/en/v5.5/esp32p4/get-started/) with ESP32-P4 support
+- [ESP-IDF v6.0.2](https://docs.espressif.com/projects/esp-idf/en/v6.0/esp32p4/get-started/) with ESP32-P4 support
 - ESP32-P4-Nano board with IP101 Ethernet PHY
 - USB device(s) to export
 
@@ -70,6 +71,8 @@ usbip attach -r 192.168.1.24 -b 1-1
 
 ### Web Dashboard
 
+> On ESP-IDF 6.0 the Web UI HTTP/API layer is currently non-functional; use the serial monitor.
+
 Open `http://192.168.1.24/` in a browser for the real-time monitoring dashboard.
 
 The dashboard shows:
@@ -109,7 +112,7 @@ ESP32-P4-Nano
 | `usbip_proto` | USB/IP wire protocol structures and serialization |
 | `usbip_server` | TCP listener, DEVLIST and IMPORT handlers |
 | `transfer_engine` | URB forwarding bridge (USB <-> network) |
-| `network_mgr` | IP101 Ethernet, DHCP, mDNS service announcement |
+| `network_mgr` | IP101 Ethernet, DHCP + link-local, mDNS |
 | `webui` | HTTP server, WebSocket, HTMX dashboard |
 | `access_control` | Open/closed mode, IP allowlist, NVS persistence |
 | `event_log` | PSRAM ring buffer for structured event logging |
@@ -213,11 +216,25 @@ This is more than sufficient for most USB devices. IC programmers, HID devices, 
 
 **Latency** is typically 1-3 ms per USB transaction over a local Ethernet network.
 
+## Tools
+
+Host-side test utilities in `tools/`:
+
+| Tool | Purpose |
+|------|---------|
+| `serial_loopback_stress.py` | Serial loopback throughput + integrity |
+| `stress_headtohead.py` | Multi-channel aggregate stress runner |
+| `mpsse_test.py` | FT4232H MPSSE self-test (pyftdi/WinUSB) |
+| `i2c_scan.py` | I2C scan with `--repeat` link-stability check |
+| `usbip_pcap_decode.py` | Decode `capture` component pcaps (usbmon) |
+
 ## Known Limitations
 
 - **USB 2.0 only** - no USB 3.x SuperSpeed (hardware limitation)
 - **Ethernet only** - no WiFi transport (by design, for reliability and latency)
 - **No Transaction Translator** - FS/LS devices only work when connected directly to the root port, not through HS hubs (ESP-IDF limitation)
+- **~16 USB host channels** - each claimed endpoint uses one; a quad device (FT4232H = 8) means ~1 fully-active quad device before `No more HCD channels`
+- **busids renumber** - hub devices are keyed by USB address (ESP-IDF exposes no hub topology), so they can change across re-enumeration; `list` before attaching
 - **100 Mbps Ethernet** - throughput limited by network, not USB bus speed (see Performance section)
 - **ESP-IDF USB host stack** - some devices with multiple configurations may have enumeration issues
 

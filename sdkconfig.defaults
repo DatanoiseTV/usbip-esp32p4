@@ -48,6 +48,11 @@ CONFIG_LWIP_TCP_KEEPALIVE_DEFAULT=y
 CONFIG_LWIP_TCP_SACK_OUT=y
 CONFIG_LWIP_NETIF_TX_SINGLE_PBUF=y
 
+# IPv4 link-local (AUTOIP / APIPA, 169.254.x.x): reach the server on a direct
+# board<->PC cable with no DHCP server. The existing DHCP client coops with it,
+# self-assigning a link-local address after DHCP probes fail. No code change.
+CONFIG_LWIP_AUTOIP=y
+
 # mDNS
 CONFIG_MDNS_MAX_SERVICES=4
 

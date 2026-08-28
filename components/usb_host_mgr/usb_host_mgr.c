@@ -146,6 +146,53 @@ static void copy_string_descriptor(const usb_str_desc_t *str_desc,
 
 /* ---- Device enumeration on NEW_DEV ---- */
 
+/* Build a usbip busid for a device.
+ *
+ * Preferred form is a stable topology path "1-1.<hub port>[.<...>]" built from
+ * physical port numbers by walking the parent-hub chain -- stable across
+ * re-enumeration so client auto-reattach survives a replug.
+ *
+ * BUT ESP-IDF does not populate parent/hub topology for devices behind an
+ * EXTERNAL hub (parent.dev_hdl == NULL), and root devices have no parent
+ * either. Without topology a port path would collapse EVERY device to "1-1" --
+ * which is a hard bug with a hub (colliding busid => the device is unreachable).
+ * So when no topology is available we fall back to the device address to
+ * guarantee UNIQUE busids. Cost: an address-based busid churns across
+ * re-enumeration. Correctness (uniqueness) must win over stability here. */
+static void build_busid_path(const usb_device_info_t *info, uint8_t dev_addr,
+                             char *out, size_t out_len)
+{
+    uint8_t ports[8];
+    int depth = 0;
+    bool have_topology = false;
+    usb_device_info_t cur = *info;
+
+    while (depth < (int)sizeof(ports)) {
+        if (cur.parent.dev_hdl == NULL) {
+            break;                              /* reached root / no parent info */
+        }
+        ports[depth++] = cur.parent.port_num;   /* this node's port on its parent hub */
+        have_topology = true;
+        if (usb_host_device_info(cur.parent.dev_hdl, &cur) != ESP_OK) {
+            break;                              /* can't walk further */
+        }
+    }
+
+    if (!have_topology) {
+        snprintf(out, out_len, "1-%u", dev_addr);   /* unique, not stable */
+        return;
+    }
+
+    /* Topology available: emit root-first "1-1.<hub port>[.<...>.<leaf>]". */
+    int n = snprintf(out, out_len, "1-1");
+    for (int i = depth - 1; i >= 0; i--) {
+        if (n < 0 || (size_t)n >= out_len) {
+            break;
+        }
+        n += snprintf(out + n, out_len - n, ".%u", ports[i]);
+    }
+}
+
 static void handle_new_device(uint8_t dev_addr)
 {
     usb_device_handle_t dev_hdl = NULL;
@@ -210,36 +257,19 @@ static void handle_new_device(uint8_t dev_addr)
         return;
     }
 
-    /* 6. Build busid path and populate dm_device_info_t.
-     *    If the device has a parent (behind a hub), the path encodes topology:
-     *    "1-{port}" for root-port devices, "1-{parent_port}.{port}" for hub children.
-     *    When parent info isn't actionable, fall back to "1-{dev_addr}". */
+    /* 6. Build a stable, topology-based busid and populate dm_device_info_t.
+     *    The path is built from physical port numbers (root port + hub ports),
+     *    which don't change across re-enumeration -- unlike the USB device
+     *    address -- so replugging the same device into the same port yields the
+     *    same busid and client auto-reattach keeps working. */
     dm_device_info_t dm_info = {0};
     dm_info.bus_id = 1;
     dm_info.dev_addr = dev_addr;
     dm_info.speed = map_speed(dev_info.speed);
-
-    if (dev_info.parent.dev_hdl != NULL && dev_info.parent.port_num != 0) {
-        /* Device is behind a hub.  Try to resolve the parent's address
-         * so we can build a proper topology path. */
-        usb_device_info_t parent_info;
-        esp_err_t perr = usb_host_device_info(dev_info.parent.dev_hdl, &parent_info);
-        if (perr == ESP_OK && parent_info.parent.dev_hdl == NULL) {
-            /* Parent is directly on the root port */
-            snprintf(dm_info.path, sizeof(dm_info.path), "1-%d.%d",
-                     parent_info.dev_addr, dev_info.parent.port_num);
-        } else if (perr == ESP_OK) {
-            /* Parent itself is behind another hub -- just use parent addr */
-            snprintf(dm_info.path, sizeof(dm_info.path), "1-%d.%d",
-                     parent_info.dev_addr, dev_info.parent.port_num);
-        } else {
-            /* Can't query parent, fall back */
-            snprintf(dm_info.path, sizeof(dm_info.path), "1-%d", dev_addr);
-        }
-        ESP_LOGI(TAG, "  Device is behind hub (parent port=%d), path=%s",
+    build_busid_path(&dev_info, dev_addr, dm_info.path, sizeof(dm_info.path));
+    if (dev_info.parent.dev_hdl != NULL) {
+        ESP_LOGI(TAG, "  Device is behind hub (parent port=%d), busid=%s",
                  dev_info.parent.port_num, dm_info.path);
-    } else {
-        snprintf(dm_info.path, sizeof(dm_info.path), "1-%d", dev_addr);
     }
 
     /* Fill descriptor fields */
@@ -352,8 +382,20 @@ static void handle_device_gone(usb_device_handle_t dev_hdl)
         device_manager_remove(fctx.found_idx);
     }
 
+    /* Release any interfaces claimed by an active import BEFORE closing.
+     * usb_host_device_close() returns ESP_ERR_INVALID_STATE if this client
+     * still has interfaces claimed on the device, which leaves the device
+     * un-freed and the root port stuck -> the next plug never generates a
+     * NEW_DEV event (hot-plug re-enumeration silently dies). The normal
+     * session-end path releases interfaces too; this path must match it. */
+    usb_host_mgr_release_interfaces(dev_addr);
+
     /* Close the USB device */
-    usb_host_device_close(s_client_hdl, dev_hdl);
+    esp_err_t close_err = usb_host_device_close(s_client_hdl, dev_hdl);
+    if (close_err != ESP_OK) {
+        ESP_LOGE(TAG, "usb_host_device_close(addr=%d) failed: %s",
+                 dev_addr, esp_err_to_name(close_err));
+    }
     tracked_remove(idx);
 
     /* Cross-component notifications */
