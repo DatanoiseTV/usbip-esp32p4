@@ -167,6 +167,28 @@ static int find_pending_by_seqnum(uint32_t seqnum)
 }
 
 /**
+ * @brief Look up an endpoint's max packet size from the device's config descriptor.
+ * @return wMaxPacketSize for the endpoint, or 0 if not found.
+ */
+static uint16_t find_ep_mps(const dm_device_info_t *devinfo, uint8_t ep_addr)
+{
+    if (!devinfo || !devinfo->config_desc_raw || devinfo->config_desc_len == 0) {
+        return 0;
+    }
+    const usb_config_desc_t *cfg = (const usb_config_desc_t *)devinfo->config_desc_raw;
+    const usb_standard_desc_t *d = (const usb_standard_desc_t *)cfg;
+    int offset = 0;
+    while ((d = usb_parse_next_descriptor_of_type(
+                    d, cfg->wTotalLength, USB_B_DESCRIPTOR_TYPE_ENDPOINT, &offset)) != NULL) {
+        const usb_ep_desc_t *ep = (const usb_ep_desc_t *)d;
+        if (ep->bEndpointAddress == ep_addr) {
+            return USB_EP_DESC_GET_MPS(ep);
+        }
+    }
+    return 0;
+}
+
+/**
  * @brief Send an error RET_SUBMIT reply (no transfer data).
  * Per spec: devid, direction, ep shall be 0 for server responses.
  * number_of_packets shall be 0xFFFFFFFF for non-ISO.
@@ -431,13 +453,18 @@ static int handle_cmd_submit(int fd, usbip_header_t *hdr, const dm_device_info_t
     /* Determine if this is a control transfer */
     bool is_control = (ep == 0);
 
-    /* Compute allocation size */
-    /* For non-control IN transfers, ESP-IDF requires num_bytes to be a multiple
-     * of the endpoint's max packet size (MPS). HS bulk MPS = 512, FS bulk = 64.
-     * Round up allocation to accommodate this. We use 512 as safe MPS upper bound. */
+    /* Compute allocation size. For non-control IN transfers, ESP-IDF requires
+     * num_bytes to be a multiple of the endpoint's max packet size -- round up to
+     * the ACTUAL endpoint MPS. A hardcoded 512 breaks endpoints whose MPS doesn't
+     * divide 512 (e.g. an interrupt endpoint with MPS 35, or odd isoc sizes). */
+    uint16_t in_mps = 0;
     size_t alloc_size = is_control ? (size_t)(buflen + 8) : (size_t)buflen;
-    if (!is_control && direction == USBIP_DIR_IN && alloc_size > 0) {
-        alloc_size = (alloc_size + 511) & ~511u;  /* Round up to 512-byte MPS */
+    if (!is_control && direction == USBIP_DIR_IN && buflen > 0) {
+        in_mps = find_ep_mps(devinfo, (uint8_t)(ep | 0x80));
+        if (in_mps == 0) {
+            in_mps = 512;  /* fallback if the descriptor lookup fails */
+        }
+        alloc_size = ((size_t)buflen + in_mps - 1) / in_mps * in_mps;
     }
     if (alloc_size < MIN_TRANSFER_SIZE) {
         alloc_size = MIN_TRANSFER_SIZE;
@@ -516,9 +543,10 @@ static int handle_cmd_submit(int fd, usbip_header_t *hdr, const dm_device_info_t
         xfer->num_bytes = buflen + 8;
         xfer->bEndpointAddress = 0;
     } else {
-        /* For IN transfers, round up to MPS multiple as required by ESP-IDF */
+        /* Round IN transfers up to a multiple of the endpoint's MPS (in_mps
+         * computed above); OUT transfers send exactly buflen. */
         if (direction == USBIP_DIR_IN && buflen > 0) {
-            xfer->num_bytes = (buflen + 511) & ~511u;
+            xfer->num_bytes = ((size_t)buflen + in_mps - 1) / in_mps * in_mps;
         } else {
             xfer->num_bytes = buflen;
         }
