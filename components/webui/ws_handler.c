@@ -164,6 +164,33 @@ static int build_logs_json(char *buf, int buflen)
     #undef LOG_BROADCAST_COUNT
 }
 
+/* Async send context: the frame is sent from the httpd task (via httpd_queue_work),
+ * not from the esp_timer task that builds the broadcast. Sending directly from the
+ * timer task raced with httpd's own recv on the same socket ("socket FD invalid"). */
+struct ws_async_send_ctx {
+    int fd;
+    size_t len;
+    char *payload;
+};
+
+static void ws_async_send_cb(void *arg)
+{
+    struct ws_async_send_ctx *ctx = (struct ws_async_send_ctx *)arg;
+    httpd_ws_frame_t frame = {
+        .type = HTTPD_WS_TYPE_TEXT,
+        .payload = (uint8_t *)ctx->payload,
+        .len = ctx->len,
+        .final = true,
+    };
+    esp_err_t ret = httpd_ws_send_frame_async(ws_server_handle, ctx->fd, &frame);
+    if (ret != ESP_OK) {
+        ESP_LOGW(TAG, "WS send failed fd=%d: %s, unregistering", ctx->fd, esp_err_to_name(ret));
+        ws_unregister_fd(ctx->fd);
+    }
+    free(ctx->payload);
+    free(ctx);
+}
+
 void ws_broadcast_stats(void)
 {
     /* Snapshot fds under lock */
@@ -203,20 +230,23 @@ void ws_broadcast_stats(void)
 
     pos += snprintf(json_buf + pos, buflen - pos, "}");
 
-    /* Send to all connected clients */
-    httpd_ws_frame_t frame = {
-        .type = HTTPD_WS_TYPE_TEXT,
-        .payload = (uint8_t *)json_buf,
-        .len = pos,
-        .final = true,
-    };
-
+    /* Queue the send onto the httpd task for each client (own payload copy each). */
     for (int i = 0; i < WS_MAX_CLIENTS; i++) {
         if (fds[i] < 0) continue;
-        esp_err_t ret = httpd_ws_send_frame_async(ws_server_handle, fds[i], &frame);
-        if (ret != ESP_OK) {
-            ESP_LOGW(TAG, "WS send failed fd=%d: %s, unregistering", fds[i], esp_err_to_name(ret));
-            ws_unregister_fd(fds[i]);
+        struct ws_async_send_ctx *ctx = malloc(sizeof(*ctx));
+        char *copy = malloc(pos);
+        if (!ctx || !copy) {
+            free(ctx);
+            free(copy);
+            continue;
+        }
+        memcpy(copy, json_buf, pos);
+        ctx->fd = fds[i];
+        ctx->len = pos;
+        ctx->payload = copy;
+        if (httpd_queue_work(ws_server_handle, ws_async_send_cb, ctx) != ESP_OK) {
+            free(ctx->payload);
+            free(ctx);
         }
     }
 

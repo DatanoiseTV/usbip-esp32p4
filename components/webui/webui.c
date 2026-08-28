@@ -347,7 +347,10 @@ esp_err_t webui_init(void)
     config.task_priority = 5;
     config.stack_size = 8192;
     config.max_uri_handlers = 32;
-    config.max_open_sockets = 4;
+    config.max_open_sockets = 7;      /* was 4; starved slots wedged the server (LWIP_MAX_SOCKETS raised to 16) */
+    config.lru_purge_enable = true;   /* reclaim the oldest socket instead of refusing new connections when full */
+    config.recv_wait_timeout = 10;    /* seconds; don't let a stalled peer pin a slot indefinitely */
+    config.send_wait_timeout = 10;
     config.close_fn = on_sock_close;
 
     esp_err_t ret = httpd_start(&s_server, &config);
