@@ -4,6 +4,7 @@
  */
 
 #include "webui.h"
+#include "webui_internal.h"
 #include "esp_log.h"
 #include "esp_http_server.h"
 #include "esp_system.h"
@@ -103,19 +104,6 @@ static bool json_get_bool(const char *json, const char *key, bool *out)
     return false;
 }
 
-static void json_escape(const char *src, char *dst, int dstlen)
-{
-    int j = 0;
-    for (int i = 0; src[i] && j < dstlen - 2; i++) {
-        char c = src[i];
-        if (c == '"' || c == '\\') dst[j++] = '\\';
-        if (c == '\n') { dst[j++] = '\\'; dst[j++] = 'n'; continue; }
-        if (c == '\r') { dst[j++] = '\\'; dst[j++] = 'r'; continue; }
-        dst[j++] = c;
-    }
-    dst[j] = '\0';
-}
-
 static const char *speed_str(device_speed_t s)
 {
     switch (s) {
@@ -158,9 +146,9 @@ static esp_err_t handle_api_device_detail(httpd_req_t *req)
     int buflen = 4096;
 
     char mfg_esc[128], prod_esc[128], ser_esc[128];
-    json_escape(info.manufacturer, mfg_esc, sizeof(mfg_esc));
-    json_escape(info.product, prod_esc, sizeof(prod_esc));
-    json_escape(info.serial, ser_esc, sizeof(ser_esc));
+    webui_json_escape(info.manufacturer, mfg_esc, sizeof(mfg_esc));
+    webui_json_escape(info.product, prod_esc, sizeof(prod_esc));
+    webui_json_escape(info.serial, ser_esc, sizeof(ser_esc));
 
     /* Client IP as dotted string */
     char client_ip_str[20] = "";
@@ -263,26 +251,18 @@ static esp_err_t handle_api_device_detail(httpd_req_t *req)
 
 /* ---- Device action endpoints ---- */
 
-static esp_err_t handle_api_device_reset(httpd_req_t *req)
+static esp_err_t handle_api_usb_reset(httpd_req_t *req)
 {
     if (!webui_check_auth(req)) return webui_reject_auth(req);
 
-    int idx = get_query_int(req, "idx", -1);
-    if (idx < 0) return send_json_error(req, 400, "missing idx");
+    event_log_add(EVENT_LOG_LEVEL_WARN, "USB bus reset requested via WebUI");
 
-    dm_device_info_t info;
-    if (device_manager_get(idx, &info) != ESP_OK || !info.in_use) {
-        return send_json_error(req, 404, "device not found");
-    }
-
-    esp_err_t err = usb_host_mgr_reset_device(info.dev_addr);
+    esp_err_t err = usb_host_mgr_reset_bus();
     if (err != ESP_OK) {
         char msg[64];
-        snprintf(msg, sizeof(msg), "reset failed: %s", esp_err_to_name(err));
+        snprintf(msg, sizeof(msg), "bus reset failed: %s", esp_err_to_name(err));
         return send_json_error(req, 500, msg);
     }
-
-    event_log_add(EVENT_LOG_LEVEL_INFO, "Device %s reset via WebUI", info.path);
     return send_json_ok(req);
 }
 
@@ -397,7 +377,7 @@ static esp_err_t handle_api_settings_auth_get(httpd_req_t *req)
     const char *username = webui_auth_username();
 
     char esc_user[128];
-    json_escape(username ? username : "", esc_user, sizeof(esc_user));
+    webui_json_escape(username ? username : "", esc_user, sizeof(esc_user));
 
     char buf[256];
     int n = snprintf(buf, sizeof(buf),
@@ -583,12 +563,12 @@ void webui_api_register(httpd_handle_t server)
     };
     httpd_register_uri_handler(server, &uri_device_detail);
 
-    /* Device reset */
-    const httpd_uri_t uri_device_reset = {
-        .uri = "/api/devices/reset", .method = HTTP_POST,
-        .handler = handle_api_device_reset, .user_ctx = NULL
+    /* USB bus reset (power-cycle the root port) */
+    const httpd_uri_t uri_usb_reset = {
+        .uri = "/api/usb/reset", .method = HTTP_POST,
+        .handler = handle_api_usb_reset, .user_ctx = NULL
     };
-    httpd_register_uri_handler(server, &uri_device_reset);
+    httpd_register_uri_handler(server, &uri_usb_reset);
 
     /* Device disconnect */
     const httpd_uri_t uri_device_disconnect = {

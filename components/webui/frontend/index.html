@@ -140,6 +140,12 @@
                     <button class="btn btn-danger" id="cap-delete" onclick="deleteCapture()" disabled>Delete</button>
                 </div>
             </div>
+            <div class="panel">
+                <div class="panel-title">USB Bus</div>
+                <div class="btn-row">
+                    <button class="btn btn-danger" onclick="if(confirm('Reset the USB bus? This disconnects and re-enumerates ALL devices and drops any attached clients.'))fetch('/api/usb/reset',{method:'POST'})">Reset USB Bus</button>
+                </div>
+            </div>
         </section>
 
         <!-- Devices Section -->

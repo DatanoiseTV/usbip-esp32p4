@@ -8,64 +8,23 @@
 #include "esp_system.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
-#include "freertos/portmacro.h"
 #include "device_manager.h"
 #include "event_log.h"
+#include "webui_internal.h"
 
 #include <string.h>
 #include <stdio.h>
 
 static const char *TAG = "ws_handler";
 
-#define WS_MAX_CLIENTS 2
+#define WS_CLIENT_LIST_MAX 8   /* >= httpd max_open_sockets, for client enumeration */
 
-/* Internal state */
-static int ws_fds[WS_MAX_CLIENTS];
 static httpd_handle_t ws_server_handle;
-static portMUX_TYPE ws_fds_lock = portMUX_INITIALIZER_UNLOCKED;
 
 void ws_handler_init(httpd_handle_t server)
 {
     ws_server_handle = server;
-    for (int i = 0; i < WS_MAX_CLIENTS; i++) {
-        ws_fds[i] = -1;
-    }
-    ESP_LOGI(TAG, "WebSocket handler initialized (max_clients=%d)", WS_MAX_CLIENTS);
-}
-
-static void ws_register_fd(int fd)
-{
-    portENTER_CRITICAL(&ws_fds_lock);
-    for (int i = 0; i < WS_MAX_CLIENTS; i++) {
-        if (ws_fds[i] == fd) {
-            portEXIT_CRITICAL(&ws_fds_lock);
-            return; /* already registered */
-        }
-    }
-    for (int i = 0; i < WS_MAX_CLIENTS; i++) {
-        if (ws_fds[i] < 0) {
-            ws_fds[i] = fd;
-            portEXIT_CRITICAL(&ws_fds_lock);
-            ESP_LOGI(TAG, "WS client registered fd=%d slot=%d", fd, i);
-            return;
-        }
-    }
-    portEXIT_CRITICAL(&ws_fds_lock);
-    ESP_LOGW(TAG, "WS client slots full, rejecting fd=%d", fd);
-}
-
-static void ws_unregister_fd(int fd)
-{
-    portENTER_CRITICAL(&ws_fds_lock);
-    for (int i = 0; i < WS_MAX_CLIENTS; i++) {
-        if (ws_fds[i] == fd) {
-            ws_fds[i] = -1;
-            portEXIT_CRITICAL(&ws_fds_lock);
-            ESP_LOGI(TAG, "WS client unregistered fd=%d slot=%d", fd, i);
-            return;
-        }
-    }
-    portEXIT_CRITICAL(&ws_fds_lock);
+    ESP_LOGI(TAG, "WebSocket handler initialized");
 }
 
 /* Build device JSON fragment into buf. Returns chars written. */
@@ -89,23 +48,8 @@ static int build_devices_json(char *buf, int buflen)
         /* Escape manufacturer and product strings for JSON safety */
         char mfr_esc[128];
         char prod_esc[128];
-        int ep;
-
-        ep = 0;
-        for (int j = 0; info.manufacturer[j] && ep < (int)sizeof(mfr_esc) - 2; j++) {
-            char c = info.manufacturer[j];
-            if (c == '"' || c == '\\') mfr_esc[ep++] = '\\';
-            mfr_esc[ep++] = c;
-        }
-        mfr_esc[ep] = '\0';
-
-        ep = 0;
-        for (int j = 0; info.product[j] && ep < (int)sizeof(prod_esc) - 2; j++) {
-            char c = info.product[j];
-            if (c == '"' || c == '\\') prod_esc[ep++] = '\\';
-            prod_esc[ep++] = c;
-        }
-        prod_esc[ep] = '\0';
+        webui_json_escape(info.manufacturer, mfr_esc, sizeof(mfr_esc));
+        webui_json_escape(info.product, prod_esc, sizeof(prod_esc));
 
         pos += snprintf(buf + pos, buflen - pos,
             "{\"idx\":%d,\"path\":\"%s\",\"vid\":%u,\"pid\":%u,\"speed\":%d,"
@@ -161,22 +105,8 @@ static int build_logs_json(char *buf, int buflen)
     pos += snprintf(buf + pos, buflen - pos, "[");
     for (size_t i = 0; i < count; i++) {
         if (i > 0) pos += snprintf(buf + pos, buflen - pos, ",");
-        /* Escape any quotes in message */
         char escaped[EVENT_LOG_MSG_MAX_LEN * 2];
-        int ep = 0;
-        for (int j = 0; entries[i].message[j] && ep < (int)sizeof(escaped) - 2; j++) {
-            char c = entries[i].message[j];
-            if (c == '"' || c == '\\') {
-                escaped[ep++] = '\\';
-            }
-            if (c == '\n') {
-                escaped[ep++] = '\\';
-                escaped[ep++] = 'n';
-                continue;
-            }
-            escaped[ep++] = c;
-        }
-        escaped[ep] = '\0';
+        webui_json_escape(entries[i].message, escaped, sizeof(escaped));
 
         pos += snprintf(buf + pos, buflen - pos,
             "{\"ts\":%lld,\"level\":%d,\"msg\":\"%s\"}",
@@ -192,18 +122,53 @@ static int build_logs_json(char *buf, int buflen)
     #undef LOG_BROADCAST_COUNT
 }
 
+/* Async send context: the frame is sent from the httpd task (via httpd_queue_work),
+ * not from the esp_timer task that builds the broadcast. Sending directly from the
+ * timer task raced with httpd's own recv on the same socket ("socket FD invalid"). */
+struct ws_async_send_ctx {
+    int fd;
+    size_t len;
+    char *payload;
+};
+
+static void ws_async_send_cb(void *arg)
+{
+    struct ws_async_send_ctx *ctx = (struct ws_async_send_ctx *)arg;
+    httpd_ws_frame_t frame = {
+        .type = HTTPD_WS_TYPE_TEXT,
+        .payload = (uint8_t *)ctx->payload,
+        .len = ctx->len,
+        .final = true,
+    };
+    esp_err_t ret = httpd_ws_send_frame_async(ws_server_handle, ctx->fd, &frame);
+    if (ret != ESP_OK) {
+        ESP_LOGW(TAG, "WS send failed fd=%d: %s", ctx->fd, esp_err_to_name(ret));
+    }
+    free(ctx->payload);
+    free(ctx);
+}
+
 void ws_broadcast_stats(void)
 {
-    /* Snapshot fds under lock */
-    int fds[WS_MAX_CLIENTS];
-    portENTER_CRITICAL(&ws_fds_lock);
-    bool has_clients = false;
-    for (int i = 0; i < WS_MAX_CLIENTS; i++) {
-        fds[i] = ws_fds[i];
-        if (fds[i] >= 0) has_clients = true;
+    if (!ws_server_handle) return;
+
+    /* Ask httpd who is connected and keep the WebSocket clients. ESP-IDF 6.0
+     * does not call the URI handler on the WS handshake (httpd_uri.c: "do not
+     * call the uri->handler"), so a handshake-time fd registry is never filled
+     * -- enumerate the live client list at send time instead. */
+    int client_fds[WS_CLIENT_LIST_MAX];
+    size_t fds_count = WS_CLIENT_LIST_MAX;
+    if (httpd_get_client_list(ws_server_handle, &fds_count, client_fds) != ESP_OK) {
+        return;
     }
-    portEXIT_CRITICAL(&ws_fds_lock);
-    if (!has_clients) return;
+    int ws_fds_list[WS_CLIENT_LIST_MAX];
+    int ws_count = 0;
+    for (size_t i = 0; i < fds_count; i++) {
+        if (httpd_ws_get_fd_info(ws_server_handle, client_fds[i]) == HTTPD_WS_CLIENT_WEBSOCKET) {
+            ws_fds_list[ws_count++] = client_fds[i];
+        }
+    }
+    if (ws_count == 0) return;
 
     /* Build the stats JSON message on the stack */
     char *json_buf = malloc(8192);
@@ -231,77 +196,34 @@ void ws_broadcast_stats(void)
 
     pos += snprintf(json_buf + pos, buflen - pos, "}");
 
-    /* Send to all connected clients */
-    httpd_ws_frame_t frame = {
-        .type = HTTPD_WS_TYPE_TEXT,
-        .payload = (uint8_t *)json_buf,
-        .len = pos,
-        .final = true,
-    };
-
-    for (int i = 0; i < WS_MAX_CLIENTS; i++) {
-        if (fds[i] < 0) continue;
-        esp_err_t ret = httpd_ws_send_frame_async(ws_server_handle, fds[i], &frame);
-        if (ret != ESP_OK) {
-            ESP_LOGW(TAG, "WS send failed fd=%d: %s, unregistering", fds[i], esp_err_to_name(ret));
-            ws_unregister_fd(fds[i]);
+    /* Queue the send onto the httpd task for each client (own payload copy each). */
+    for (int i = 0; i < ws_count; i++) {
+        struct ws_async_send_ctx *ctx = malloc(sizeof(*ctx));
+        char *copy = malloc(pos);
+        if (!ctx || !copy) {
+            free(ctx);
+            free(copy);
+            continue;
+        }
+        memcpy(copy, json_buf, pos);
+        ctx->fd = ws_fds_list[i];
+        ctx->len = pos;
+        ctx->payload = copy;
+        if (httpd_queue_work(ws_server_handle, ws_async_send_cb, ctx) != ESP_OK) {
+            free(ctx->payload);
+            free(ctx);
         }
     }
 
     free(json_buf);
 }
 
-/* Handle incoming WS messages */
-static void handle_ws_message(const char *data, int len)
-{
-    /* Simple JSON parse: look for "action" and "busid" */
-    const char *act = strstr(data, "\"action\"");
-    if (!act) return;
-
-    if (strstr(act, "\"toggle_export\"")) {
-        const char *busid_key = strstr(data, "\"busid\"");
-        if (!busid_key) return;
-        /* Find the value */
-        const char *colon = strchr(busid_key + 7, ':');
-        if (!colon) return;
-        const char *quote1 = strchr(colon, '"');
-        if (!quote1) return;
-        quote1++;
-        const char *quote2 = strchr(quote1, '"');
-        if (!quote2 || quote2 - quote1 >= 32) return;
-
-        char busid[32];
-        int blen = (int)(quote2 - quote1);
-        memcpy(busid, quote1, blen);
-        busid[blen] = '\0';
-
-        int idx;
-        if (device_manager_lookup(busid, &idx) == ESP_OK) {
-            dm_device_info_t info;
-            if (device_manager_get(idx, &info) == ESP_OK) {
-                if (info.state == DEV_STATE_EXPORTED) {
-                    device_manager_release(idx);
-                    ESP_LOGI(TAG, "Released device %s via WS", busid);
-                }
-                /* Note: actual export requires a USBIP client connection,
-                   so we can only release from the web UI */
-            }
-        }
-    }
-}
-
-/* WebSocket handler called by esp_http_server */
+/* WebSocket handler called by esp_http_server. On ESP-IDF 6.0 the handshake is
+ * handled internally, so this is invoked only for incoming frames. The frontend
+ * drives all device actions over the REST API and never sends WS frames, so any
+ * frame received here is simply drained. */
 esp_err_t ws_handler(httpd_req_t *req)
 {
-    if (req->method == HTTP_GET) {
-        /* This is the initial WS handshake GET - register client for broadcasts */
-        int fd = httpd_req_to_sockfd(req);
-        ESP_LOGI(TAG, "WS handshake from fd=%d", fd);
-        ws_register_fd(fd);
-        return ESP_OK;
-    }
-
-    /* Receive the WS frame */
     httpd_ws_frame_t frame;
     memset(&frame, 0, sizeof(frame));
     frame.type = HTTPD_WS_TYPE_TEXT;
@@ -311,7 +233,6 @@ esp_err_t ws_handler(httpd_req_t *req)
         ESP_LOGE(TAG, "httpd_ws_recv_frame length failed: %s", esp_err_to_name(ret));
         return ret;
     }
-
     if (frame.len == 0) {
         return ESP_OK;
     }
@@ -329,18 +250,6 @@ esp_err_t ws_handler(httpd_req_t *req)
         return ret;
     }
 
-    int fd = httpd_req_to_sockfd(req);
-    ws_register_fd(fd);
-
-    if (frame.type == HTTPD_WS_TYPE_TEXT) {
-        handle_ws_message((char *)buf, frame.len);
-    }
-
     free(buf);
     return ESP_OK;
-}
-
-void ws_on_close(int fd)
-{
-    ws_unregister_fd(fd);
 }

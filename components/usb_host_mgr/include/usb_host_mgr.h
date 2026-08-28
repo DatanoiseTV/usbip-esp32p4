@@ -77,15 +77,15 @@ void usb_host_mgr_notify_removal(uint8_t dev_addr);
 uint8_t usb_host_mgr_check_removal(void);
 
 /**
- * @brief Reset a USB device
+ * @brief Reset the USB bus by power-cycling the root port.
  *
- * Currently returns ESP_ERR_NOT_SUPPORTED as the underlying
- * usb_host_device_reset() API is not available in ESP-IDF v5.5.
+ * Disconnects and re-enumerates every downstream device (the root-port device
+ * or hub and everything behind it). ESP-IDF exposes no per-device reset, so a
+ * root-port power cycle is the only supported reset primitive.
  *
- * @param dev_addr USB device address
- * @return ESP_OK on success, or ESP_ERR_NOT_SUPPORTED
+ * @return ESP_OK on success, else an error from usb_host_lib_set_root_port_power()
  */
-esp_err_t usb_host_mgr_reset_device(uint8_t dev_addr);
+esp_err_t usb_host_mgr_reset_bus(void);
 
 #ifdef __cplusplus
 }

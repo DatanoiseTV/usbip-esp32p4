@@ -187,6 +187,9 @@
         if (name === 'settings') {
             loadAllSettings();
         }
+        if (name === 'devices' && lastStats) {
+            updateDeviceList(lastStats.devices || []);
+        }
         if (name === 'topology' && lastStats) {
             buildTopology(lastStats.devices || []);
         }
@@ -266,7 +269,7 @@
                     handleStats(msg);
                 }
             } catch (e) {
-                /* ignore malformed messages */
+                console.error('WS message handling error:', e);
             }
         };
     }
@@ -504,6 +507,10 @@
             return;
         }
 
+        /* Remove stale empty-state placeholder before reconciling cards */
+        var emptyState = $deviceList.querySelector('.empty-state');
+        if (emptyState) emptyState.parentNode.removeChild(emptyState);
+
         /* Build or update device cards - reconcile existing DOM */
         var existingCards = $deviceList.querySelectorAll('.device-card');
         var existingMap = {};
@@ -728,7 +735,6 @@
         }
         html += '<button class="btn btn-sm btn-secondary" onclick="window._deviceAction(\'export\',' + idx + ')">Toggle Export</button>';
         html += '<button class="btn btn-sm btn-danger" onclick="if(confirm(\'Eject this device?\'))window._deviceAction(\'disconnect\',' + idx + ')">Eject</button>';
-        html += '<button class="btn btn-sm btn-warn" onclick="window._deviceAction(\'reset\',' + idx + ')">Reset</button>';
         html += '</div>';
 
         body.innerHTML = html;
