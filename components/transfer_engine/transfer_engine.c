@@ -396,6 +396,24 @@ static int handle_cmd_submit(int fd, usbip_header_t *hdr, const dm_device_info_t
     if (buflen > MAX_TRANSFER_SIZE) buflen = MAX_TRANSFER_SIZE;
     if (num_iso < 0) num_iso = 0;
 
+    /* Intercept SET_INTERFACE (bmRequestType=0x01, bRequest=0x0B). ESP-IDF brings
+     * up an alternate setting's endpoints only via usb_host_interface_claim(); a
+     * passed-through control transfer would switch the device but leave the host
+     * side at alt 0, so isoc endpoints (UVC/UAC) never get a handle. Re-claim at
+     * the requested alt and ack the client (SET_INTERFACE has no data stage). */
+    if (ep == 0) {
+        const uint8_t *setup = hdr->u.cmd_submit.setup;
+        if (setup[0] == 0x01 && setup[1] == 0x0B) {
+            uint8_t alt   = setup[2];   /* wValue low byte */
+            uint8_t iface = setup[4];   /* wIndex low byte */
+            esp_err_t e = usb_host_mgr_set_alt_setting(devinfo->dev_addr, iface, alt);
+            ESP_LOGI(TAG, "SET_INTERFACE iface=%u alt=%u -> %s",
+                     iface, alt, esp_err_to_name(e));
+            send_error_reply(fd, seqnum, e == ESP_OK ? 0 : -LINUX_EIO);
+            return 0;
+        }
+    }
+
     /* Find a free slot */
     int slot_idx = find_free_slot();
     if (slot_idx < 0) {
@@ -533,6 +551,7 @@ static int handle_cmd_submit(int fd, usbip_header_t *hdr, const dm_device_info_t
 
     /* For ISO: receive ISO packet descriptors from socket */
     if (num_iso > 0) {
+        uint32_t iso_total = 0;
         for (int i = 0; i < num_iso; i++) {
             usbip_iso_packet_descriptor_t iso_desc;
             if (usbip_net_recv(fd, &iso_desc, sizeof(iso_desc)) != 0) {
@@ -542,7 +561,12 @@ static int handle_cmd_submit(int fd, usbip_header_t *hdr, const dm_device_info_t
             }
             usbip_pack_iso_descriptor(&iso_desc, false); /* network -> host */
             xfer->isoc_packet_desc[i].num_bytes = iso_desc.length;
+            iso_total += iso_desc.length;
         }
+        /* ESP-IDF requires xfer->num_bytes to exactly equal the sum of all isoc
+         * packet lengths ("num_bytes != num_bytes of all packets" otherwise). The
+         * MPS round-up applied to IN transfers above breaks that, so set it here. */
+        xfer->num_bytes = iso_total;
     }
 
     /* Submit the transfer */

@@ -87,6 +87,22 @@ uint8_t usb_host_mgr_check_removal(void);
  */
 esp_err_t usb_host_mgr_reset_bus(void);
 
+/**
+ * @brief Switch a claimed interface to a different alternate setting.
+ *
+ * Releases and re-claims the interface at @p alt so ESP-IDF issues SET_INTERFACE
+ * and brings up that alt setting's endpoints. Needed for isochronous devices
+ * (UVC cameras, UAC audio) whose streaming endpoints live in alt settings > 0 --
+ * a passed-through SET_INTERFACE control transfer switches the device but leaves
+ * the host side at alt 0, so those endpoints never get a handle.
+ *
+ * @param dev_addr USB device address
+ * @param iface    Interface number
+ * @param alt      Alternate setting to select
+ * @return ESP_OK on success, else an error from usb_host_interface_claim()
+ */
+esp_err_t usb_host_mgr_set_alt_setting(uint8_t dev_addr, uint8_t iface, uint8_t alt);
+
 #ifdef __cplusplus
 }
 #endif
