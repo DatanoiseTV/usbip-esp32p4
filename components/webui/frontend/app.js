@@ -735,7 +735,6 @@
         }
         html += '<button class="btn btn-sm btn-secondary" onclick="window._deviceAction(\'export\',' + idx + ')">Toggle Export</button>';
         html += '<button class="btn btn-sm btn-danger" onclick="if(confirm(\'Eject this device?\'))window._deviceAction(\'disconnect\',' + idx + ')">Eject</button>';
-        html += '<button class="btn btn-sm btn-warn" onclick="window._deviceAction(\'reset\',' + idx + ')">Reset</button>';
         html += '</div>';
 
         body.innerHTML = html;

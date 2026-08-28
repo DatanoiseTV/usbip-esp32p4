@@ -251,26 +251,18 @@ static esp_err_t handle_api_device_detail(httpd_req_t *req)
 
 /* ---- Device action endpoints ---- */
 
-static esp_err_t handle_api_device_reset(httpd_req_t *req)
+static esp_err_t handle_api_usb_reset(httpd_req_t *req)
 {
     if (!webui_check_auth(req)) return webui_reject_auth(req);
 
-    int idx = get_query_int(req, "idx", -1);
-    if (idx < 0) return send_json_error(req, 400, "missing idx");
+    event_log_add(EVENT_LOG_LEVEL_WARN, "USB bus reset requested via WebUI");
 
-    dm_device_info_t info;
-    if (device_manager_get(idx, &info) != ESP_OK || !info.in_use) {
-        return send_json_error(req, 404, "device not found");
-    }
-
-    esp_err_t err = usb_host_mgr_reset_device(info.dev_addr);
+    esp_err_t err = usb_host_mgr_reset_bus();
     if (err != ESP_OK) {
         char msg[64];
-        snprintf(msg, sizeof(msg), "reset failed: %s", esp_err_to_name(err));
+        snprintf(msg, sizeof(msg), "bus reset failed: %s", esp_err_to_name(err));
         return send_json_error(req, 500, msg);
     }
-
-    event_log_add(EVENT_LOG_LEVEL_INFO, "Device %s reset via WebUI", info.path);
     return send_json_ok(req);
 }
 
@@ -571,12 +563,12 @@ void webui_api_register(httpd_handle_t server)
     };
     httpd_register_uri_handler(server, &uri_device_detail);
 
-    /* Device reset */
-    const httpd_uri_t uri_device_reset = {
-        .uri = "/api/devices/reset", .method = HTTP_POST,
-        .handler = handle_api_device_reset, .user_ctx = NULL
+    /* USB bus reset (power-cycle the root port) */
+    const httpd_uri_t uri_usb_reset = {
+        .uri = "/api/usb/reset", .method = HTTP_POST,
+        .handler = handle_api_usb_reset, .user_ctx = NULL
     };
-    httpd_register_uri_handler(server, &uri_device_reset);
+    httpd_register_uri_handler(server, &uri_usb_reset);
 
     /* Device disconnect */
     const httpd_uri_t uri_device_disconnect = {

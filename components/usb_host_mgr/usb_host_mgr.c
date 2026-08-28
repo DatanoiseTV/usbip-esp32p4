@@ -693,8 +693,18 @@ uint8_t usb_host_mgr_check_removal(void)
     return addr;
 }
 
-esp_err_t usb_host_mgr_reset_device(uint8_t dev_addr)
+esp_err_t usb_host_mgr_reset_bus(void)
 {
-    ESP_LOGW(TAG, "Device reset not supported in current ESP-IDF version (addr=%d)", dev_addr);
-    return ESP_ERR_NOT_SUPPORTED;
+    ESP_LOGW(TAG, "USB bus reset: power-cycling root port");
+    esp_err_t err = usb_host_lib_set_root_port_power(false);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "root port power OFF failed: %s", esp_err_to_name(err));
+        return err;
+    }
+    vTaskDelay(pdMS_TO_TICKS(300));   /* let disconnects propagate and devices free */
+    err = usb_host_lib_set_root_port_power(true);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "root port power ON failed: %s", esp_err_to_name(err));
+    }
+    return err;
 }
