@@ -708,3 +708,24 @@ esp_err_t usb_host_mgr_reset_bus(void)
     }
     return err;
 }
+
+esp_err_t usb_host_mgr_set_alt_setting(uint8_t dev_addr, uint8_t iface, uint8_t alt)
+{
+    usb_device_handle_t dev = usb_host_mgr_get_handle(dev_addr);
+    if (!dev) {
+        return ESP_ERR_NOT_FOUND;
+    }
+    /* The interface was claimed at alt 0 during import. Release and re-claim at
+     * the requested alt so ESP-IDF issues SET_INTERFACE on the wire AND brings up
+     * that alt setting's endpoints (isoc for UVC/UAC). A passed-through control
+     * transfer alone would switch the device but leave the host side at alt 0. */
+    usb_host_interface_release(s_client_hdl, dev, iface);
+    esp_err_t err = usb_host_interface_claim(s_client_hdl, dev, iface, alt);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "Interface %u alt %u claim failed: %s",
+                 iface, alt, esp_err_to_name(err));
+    } else {
+        ESP_LOGI(TAG, "Interface %u -> alt %u (endpoints reconfigured)", iface, alt);
+    }
+    return err;
+}
