@@ -616,6 +616,7 @@ esp_err_t usb_host_mgr_claim_interfaces(uint8_t dev_addr)
     }
 
     int offset = 0;
+    int total = 0, claimed = 0;
     const usb_standard_desc_t *cur = (const usb_standard_desc_t *)config_desc;
     while ((cur = usb_parse_next_descriptor_of_type(
                 cur, config_desc->wTotalLength,
@@ -624,6 +625,7 @@ esp_err_t usb_host_mgr_claim_interfaces(uint8_t dev_addr)
         if (intf->bAlternateSetting != 0) {
             continue;
         }
+        total++;
         err = usb_host_interface_claim(s_client_hdl, dev_hdl,
                                        intf->bInterfaceNumber, 0);
         if (err != ESP_OK) {
@@ -631,11 +633,21 @@ esp_err_t usb_host_mgr_claim_interfaces(uint8_t dev_addr)
                      intf->bInterfaceNumber, esp_err_to_name(err));
             /* Continue claiming other interfaces */
         } else {
+            claimed++;
             ESP_LOGI(TAG, "Claimed interface %d on addr %d",
                      intf->bInterfaceNumber, dev_addr);
         }
     }
 
+    /* Total claim failure (e.g. HCD channel exhaustion) must fail the import so
+     * the caller releases the device instead of stranding it EXPORTED with a
+     * dead transfer engine. Partial success is fine -- the client can still use
+     * whatever interfaces did claim. */
+    if (total > 0 && claimed == 0) {
+        ESP_LOGE(TAG, "claim_interfaces: 0 of %d interfaces claimed for addr %d",
+                 total, dev_addr);
+        return ESP_ERR_NOT_FINISHED;
+    }
     return ESP_OK;
 }
 
