@@ -1,0 +1,63 @@
+name: Release
+
+# Cuts a GitHub Release when a v* tag is pushed. The intended flow:
+#   1. work on a dev-* branch (CI builds + uploads a binary artifact)
+#   2. flash that artifact and PHYSICALLY TEST it on hardware
+#   3. merge dev-* -> main
+#   4. tag the release commit: git tag v1.2.3 && git push origin v1.2.3
+# The tag build's embedded version string matches the tag, so the released
+# binary is identified by its version.
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write   # required to create the release
+
+jobs:
+  release:
+    name: Build + publish release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build + merge binary
+        uses: espressif/esp-idf-ci-action@v1
+        with:
+          esp_idf_version: v6.0.2
+          target: esp32p4
+          command: idf.py build && idf.py merge-bin --output build/usbip-esp32p4-merged.bin
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+          files: |
+            build/usbip-esp32p4-merged.bin
+            build/usbip-esp32p4.bin
+            build/bootloader/bootloader.bin
+            build/partition_table/partition-table.bin
+          body: |
+            ESP32-P4 USB/IP server firmware — built with ESP-IDF v6.0.2 for `esp32p4`.
+
+            ### Flash (no toolchain required)
+
+            Single merged image (flash at offset 0x0):
+
+            ```
+            esptool.py --chip esp32p4 write-flash 0x0 usbip-esp32p4-merged.bin
+            ```
+
+            Or the individual images:
+
+            ```
+            esptool.py --chip esp32p4 write-flash \
+              0x2000  bootloader.bin \
+              0x8000  partition-table.bin \
+              0x10000 usbip-esp32p4.bin
+            ```
+
+            Install esptool with `pip install esptool` if you don't have it.
