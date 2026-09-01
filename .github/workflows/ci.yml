@@ -1,0 +1,39 @@
+name: CI
+
+# Build check for staging branches. Runs on every dev-* push and on PRs into
+# main. It does NOT release -- it produces the flashable binary as an artifact
+# so it can be PHYSICALLY TESTED on hardware before the change is merged to main.
+on:
+  push:
+    branches:
+      - 'dev-*'
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  build:
+    name: Build (ESP-IDF v6.0.2 / esp32p4)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build + merge binary
+        uses: espressif/esp-idf-ci-action@v1
+        with:
+          esp_idf_version: v6.0.2
+          target: esp32p4
+          # merge-bin runs esptool from inside build/, so --output is relative to it
+          command: idf.py build && idf.py merge-bin --output usbip-esp32p4-merged.bin
+
+      - name: Upload firmware (download + flash this to physically test before merging to main)
+        uses: actions/upload-artifact@v4
+        with:
+          name: usbip-esp32p4-firmware-${{ github.sha }}
+          if-no-files-found: error
+          path: |
+            build/usbip-esp32p4-merged.bin
+            build/usbip-esp32p4.bin
+            build/bootloader/bootloader.bin
+            build/partition_table/partition-table.bin
