@@ -26,13 +26,42 @@ A standalone USB/IP server running on the ESP32-P4-Nano that exports locally-con
 
 ## Quick Start
 
-### Prerequisites
+You don't need a build environment to run this. Grab a prebuilt binary from
+[**Releases**](https://github.com/ringof/usbip-esp32p4/releases/latest) and flash it — or build from source if you're developing.
+
+### Flash a prebuilt release (no toolchain required)
+
+1. Download **`usbip-esp32p4-merged.bin`** from the [latest release](https://github.com/ringof/usbip-esp32p4/releases/latest).
+   It's a single combined image (bootloader + partition table + app) that flashes at offset `0x0` — nothing else to download, no offsets to get right.
+2. Connect the board's **USB-C console port** to your PC (the one that shows up as a serial/COM port — *not* the USB-A host port where you plug in the devices you want to export).
+3. Flash it, using **either** method:
+
+   **A. Browser flasher — nothing to install** (Chrome or Edge):
+   Open **[ESP Launchpad / esptool-js](https://espressif.github.io/esptool-js/)** → *Connect* → pick the board's serial port → add `usbip-esp32p4-merged.bin` at offset `0x0` → *Program*.
+
+   **B. Command line — `esptool`** (`pip install esptool`, or use one already in your ESP-IDF environment):
+   ```bash
+   esptool --chip esp32p4 -p COM3 write-flash 0x0 usbip-esp32p4-merged.bin
+   ```
+   Replace `COM3` (Windows) / `/dev/ttyUSB0` (Linux) / `/dev/cu.usbserial-*` (macOS) with your port. Omit `-p ...` and esptool will auto-detect.
+
+4. Reset the board. Watch the serial console at **115200 baud** — it prints its IP address on boot.
+
+> If flashing can't sync, put the board in download mode: hold **BOOT**, tap **RESET**, release **BOOT**, then retry.
+
+Then jump to [Connect from Linux](#connect-from-linux) / [Connect from Windows](#connect-from-windows) below.
+
+### Build from source
+
+For development, or to modify the firmware:
+
+**Prerequisites**
 
 - [ESP-IDF v6.0.2](https://docs.espressif.com/projects/esp-idf/en/v6.0/esp32p4/get-started/) with ESP32-P4 support
 - ESP32-P4-Nano board with IP101 Ethernet PHY
 - USB device(s) to export
 
-### Build and Flash
+**Build and flash**
 
 ```bash
 source /path/to/esp-idf/export.sh

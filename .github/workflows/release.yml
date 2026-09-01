@@ -44,21 +44,33 @@ jobs:
           body: |
             ESP32-P4 USB/IP server firmware — built with ESP-IDF v6.0.2 for `esp32p4`.
 
-            ### Flash (no toolchain required)
+            ## Flashing
 
-            Single merged image (flash at offset 0x0):
+            Download **`usbip-esp32p4-merged.bin`** below. It's a single combined
+            image (bootloader + partition table + app) that flashes at offset `0x0`.
+
+            Connect the board's **USB-C console port** (the one that shows up as a
+            serial/COM port — not the USB-A host port for exported devices).
+
+            ### Easiest — browser flasher, nothing to install
+
+            Open **[esptool-js](https://espressif.github.io/esptool-js/)** in Chrome or
+            Edge → *Connect* → pick the serial port → add `usbip-esp32p4-merged.bin` at
+            offset `0x0` → *Program*.
+
+            ### Or with esptool on the command line
+
+            `pip install esptool`, then:
 
             ```
-            esptool.py --chip esp32p4 write-flash 0x0 usbip-esp32p4-merged.bin
+            esptool --chip esp32p4 -p <PORT> write-flash 0x0 usbip-esp32p4-merged.bin
             ```
 
-            Or the individual images:
+            Replace `<PORT>` with your serial port (`COM3`, `/dev/ttyUSB0`, …), or omit
+            `-p <PORT>` to auto-detect.
 
-            ```
-            esptool.py --chip esp32p4 write-flash \
-              0x2000  bootloader.bin \
-              0x8000  partition-table.bin \
-              0x10000 usbip-esp32p4.bin
-            ```
+            If flashing can't sync, hold **BOOT**, tap **RESET**, release **BOOT**, retry.
 
-            Install esptool with `pip install esptool` if you don't have it.
+            After flashing, reset the board and watch the console at **115200 baud** — it
+            prints its IP address on boot. See the
+            [README](https://github.com/ringof/usbip-esp32p4#readme) to attach devices.
