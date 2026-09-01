@@ -24,7 +24,8 @@ jobs:
         with:
           esp_idf_version: v6.0.2
           target: esp32p4
-          command: idf.py build && idf.py merge-bin --output build/usbip-esp32p4-merged.bin
+          # merge-bin runs esptool from inside build/, so --output is relative to it
+          command: idf.py build && idf.py merge-bin --output usbip-esp32p4-merged.bin
 
       - name: Upload firmware (download + flash this to physically test before merging to main)
         uses: actions/upload-artifact@v4
