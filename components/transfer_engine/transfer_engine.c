@@ -67,6 +67,7 @@ static const char *TAG = "xfer_eng";
 
 typedef struct {
     bool active;
+    int owner_fd;   /* owning client connection fd; isolates the shared table per-connection */
     uint32_t seqnum;
     uint32_t devid;
     uint32_t direction;
@@ -82,6 +83,9 @@ typedef struct {
 } pending_urb_t;
 
 static pending_urb_t s_pending[MAX_PENDING_URBS];
+/* Guards slot allocation in the shared table: multiple client connections run
+ * concurrent transfer engines against this one array. */
+static portMUX_TYPE s_pending_lock = portMUX_INITIALIZER_UNLOCKED;
 
 /* ------------------------------------------------------------------ */
 /* Transfer callback                                                   */
@@ -142,24 +146,34 @@ static int drain_socket(int fd, int nbytes)
  * @brief Find a free slot in the pending URB table.
  * @return slot index, or -1 if full
  */
-static int find_free_slot(void)
+static int reserve_free_slot(int fd, uint32_t seqnum)
 {
+    int idx = -1;
+    portENTER_CRITICAL(&s_pending_lock);
     for (int i = 0; i < MAX_PENDING_URBS; i++) {
         if (!s_pending[i].active) {
-            return i;
+            /* Reserve under the lock so two connection tasks can't grab the same
+             * slot, and stamp the owner so other connections skip it. */
+            s_pending[i].active   = true;
+            s_pending[i].owner_fd = fd;
+            s_pending[i].seqnum   = seqnum;
+            idx = i;
+            break;
         }
     }
-    return -1;
+    portEXIT_CRITICAL(&s_pending_lock);
+    return idx;
 }
 
 /**
  * @brief Find a pending URB by seqnum.
  * @return slot index, or -1 if not found
  */
-static int find_pending_by_seqnum(uint32_t seqnum)
+static int find_pending_by_seqnum(uint32_t seqnum, int fd)
 {
     for (int i = 0; i < MAX_PENDING_URBS; i++) {
-        if (s_pending[i].active && s_pending[i].seqnum == seqnum) {
+        if (s_pending[i].active && s_pending[i].owner_fd == fd &&
+            s_pending[i].seqnum == seqnum) {
             return i;
         }
     }
@@ -436,8 +450,8 @@ static int handle_cmd_submit(int fd, usbip_header_t *hdr, const dm_device_info_t
         }
     }
 
-    /* Find a free slot */
-    int slot_idx = find_free_slot();
+    /* Reserve a free slot for this connection (atomic under the table lock) */
+    int slot_idx = reserve_free_slot(fd, seqnum);
     if (slot_idx < 0) {
         ESP_LOGE(TAG, "Pending URB table full (%d slots)", MAX_PENDING_URBS);
         if (direction == USBIP_DIR_OUT && buflen > 0) {
@@ -637,7 +651,7 @@ static int handle_cmd_unlink(int fd, usbip_header_t *hdr, const dm_device_info_t
     capture_submit_packet(CAPTURE_DIR_CLIENT_TO_SERVER, hdr, sizeof(*hdr), NULL, 0);
 #endif
 
-    int slot_idx = find_pending_by_seqnum(unlink_seqnum);
+    int slot_idx = find_pending_by_seqnum(unlink_seqnum, fd);
 
     if (slot_idx >= 0) {
         /* Found the pending URB - abort it.
@@ -807,8 +821,8 @@ int transfer_engine_run(int sockfd, const char *busid)
 
         for (int i = 0; i < MAX_PENDING_URBS; i++) {
             pending_urb_t *slot = &s_pending[i];
-            if (!slot->active) {
-                continue;
+            if (!slot->active || slot->owner_fd != sockfd) {
+                continue;  /* only poll this connection's own URBs */
             }
 
             if (xSemaphoreTake(slot->sem, 0) == pdTRUE) {
@@ -857,8 +871,8 @@ cleanup:
 
         for (int i = 0; i < MAX_PENDING_URBS; i++) {
             pending_urb_t *slot = &s_pending[i];
-            if (!slot->active) {
-                continue;
+            if (!slot->active || slot->owner_fd != sockfd) {
+                continue;  /* only tear down this connection's own URBs */
             }
             ESP_LOGW(TAG, "Cleanup: aborting pending URB seqnum=%lu",
                      (unsigned long)slot->seqnum);
