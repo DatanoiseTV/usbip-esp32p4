@@ -5,12 +5,12 @@ A standalone USB/IP server running on the ESP32-P4-Nano that exports locally-con
 ## Features
 
 - **Wire-compatible** with standard USB/IP clients (`usbip` on Linux, `usbip-win`/`usbip-win2` on Windows)
-- **USB 2.0 High-Speed** (480 Mbps) with all transfer types: control, bulk, interrupt, isochronous
-- **Hub support** for multiple simultaneous devices
+- **USB 2.0 High-Speed** (480 Mbps) - control, bulk, and interrupt transfers; isochronous works within tight bandwidth/MPS limits (see [Known Limitations](#known-limitations))
+- **Single-hub support** for multiple simultaneous devices, with live topology in the Web UI
 - **100 Mbps Ethernet** with IEEE 802.3x flow control and tuned lwIP stack
 - **Link-local (AUTOIP)** - reachable at 169.254.x.x on a direct cable with no DHCP
 - **mDNS discovery** (`_usbip._tcp`) - auto-discoverable on the network
-- **Real-time Web UI** dashboard with device tree, bandwidth monitoring, and event log
+- **Real-time Web UI** dashboard with device tree, bandwidth monitoring, event log, and a USB bus-reset control
 - **Access control** with open/closed mode and IP allowlist (persisted in NVS)
 - **360 MHz dual-core RISC-V** with 32 MB PSRAM
 
@@ -239,9 +239,23 @@ The effective throughput is limited by the **100 Mbps Ethernet** link and the ES
 | USB/IP protocol overhead | ~10 MB/s for bulk transfers |
 | Practical throughput | **5-10 MB/s** depending on transfer pattern |
 
-This is more than sufficient for most USB devices. IC programmers, HID devices, dongles, serial adapters, and even many storage operations work well within these limits. Devices that require sustained high-bandwidth (e.g., USB 2.0 webcams at high resolution) may experience reduced frame rates.
+This is more than sufficient for the devices this project targets: IC programmers, HID devices, dongles, and serial adapters (FTDI et al.) all work comfortably, as do many storage operations. High-bandwidth **isochronous** devices are the exception — see the envelope below.
 
 **Latency** is typically 1-3 ms per USB transaction over a local Ethernet network.
+
+### Practical device envelope
+
+Beyond wire throughput, the ESP32-P4's USB host controller (DWC OTG) imposes some hard ceilings worth knowing *before you pick a device*. These are ESP-IDF / P4 silicon limits, not firmware bugs:
+
+| Constraint | What it means for you |
+|-----------|-----------------------|
+| **~16 host channels** (one per claimed endpoint) | ~1 fully-active quad device (e.g. FT4232H = 8 bulk endpoints) before `No more HCD channels`. Simple devices — a serial adapter, a dongle — cost far fewer, so you can run many. |
+| **No Transaction Translator** | Full-/Low-Speed devices must plug into the **root port directly**. Behind a High-Speed hub their port is disabled (`transaction translator not supported`). |
+| **Isochronous is bandwidth-boxed** | USB **webcams won't stream**: the client batches isoc into ~384 KB URBs that exceed the P4's ~250 KB DMA-capable pool, so the URB can't even be allocated. Enumeration and attach work; video does not. |
+| **FS isochronous MPS ≤ 512** | An isoc endpoint with `wMaxPacketSize > 512` (e.g. a 768-byte headset speaker) can't be claimed. A small mic (144 B) is fine. |
+| **Single hub only** | One hub works and its topology is shown in the Web UI. Chained/multi-level hubs can't be disambiguated (ESP-IDF exposes no parent handle), so same-port devices on different hubs would collide. |
+
+See [Known Limitations](#known-limitations) for the complete list, including transport and protocol constraints.
 
 ## Tools
 
